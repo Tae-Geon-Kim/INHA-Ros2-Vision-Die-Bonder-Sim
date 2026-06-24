@@ -1,0 +1,16 @@
+
+# 1. ROS 2 빌드 및 로그
+build/
+install/
+log/
+
+# 2. Python 핵심 캐시
+__pycache__/
+*.pyc
+
+# 3. 보안 파일 (Raw SQL 사용 시 DB 접속 정보 등 은닉)
+.env
+
+# 4. OS 및 에디터 캐시
+.DS_Store
+.vscode/
