@@ -14,3 +14,5 @@ __pycache__/
 # 4. OS 및 에디터 캐시
 .DS_Store
 .vscode/
+
+.venv/
