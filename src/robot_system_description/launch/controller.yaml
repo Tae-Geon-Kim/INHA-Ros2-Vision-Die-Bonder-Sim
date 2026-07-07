@@ -1,0 +1,23 @@
+robot_system_controller:
+  # Publish all joint states -----------------------------------
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50
+
+  # Position Controllers --------------------------------------
+  슬라이더 10_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 슬라이더 10
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  슬라이더 11_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 슬라이더 11
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 12_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 12
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  슬라이더 13_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 슬라이더 13
+    pid: {p: 100.0, i: 0.01, d: 10.0}
