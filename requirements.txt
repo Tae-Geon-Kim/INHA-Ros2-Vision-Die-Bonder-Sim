@@ -365,3 +365,5 @@ xdg==5
 xkit==0.0.0
 zipp==1.0.0
 zope.interface==5.4.0
+python-jose[cryptography]==3.5.0
+fastapi-limiter==0.2.0
