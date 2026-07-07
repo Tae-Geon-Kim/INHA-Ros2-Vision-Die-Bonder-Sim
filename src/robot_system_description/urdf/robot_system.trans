@@ -1,0 +1,48 @@
+<?xml version="1.0" ?>
+<robot name="robot_system" xmlns:xacro="http://www.ros.org/wiki/xacro" >
+
+<transmission name="슬라이더 10_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="슬라이더 10">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="슬라이더 10_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="슬라이더 11_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="슬라이더 11">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="슬라이더 11_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="회전 12_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="회전 12">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="회전 12_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="슬라이더 13_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="슬라이더 13">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="슬라이더 13_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+</robot>
