@@ -4,7 +4,7 @@ from web_backend.core.config import redis_settings
 redis_db = redis.Redis(
     host = redis_settings.REDIS_HOST,
     port = redis_settings.REDIS_PORT,
-    password = redis_settings.REDIS_PASSWORD,
+    password = redis_settings.REDIS_PASSWORD or None,
     decode_responses = True
 )
 

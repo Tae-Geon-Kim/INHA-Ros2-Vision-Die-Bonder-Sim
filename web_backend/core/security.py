@@ -104,12 +104,4 @@ async def get_current_user(
             status_code = status.HTTP_401_UNAUTHORIZED,
             detail = "존재하지 않는 사용자입니다."
         )
-    
-    if user_info['deleted_at'] is not None:
-        raise HTTPException(
-            status_code = status.HTTP_401_UNAUTHORIZED,
-            detail = "탈퇴 처리된 사용자입니다. 접근 할 수 없습니다."
-        )
-    
     return user_info
-    

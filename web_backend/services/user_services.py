@@ -19,6 +19,11 @@ from web_backend.models.user_logs_models import insert_user_log
 
 secret_key = jwt_settings.SECRET_KEY
 algorithm = jwt_settings.ALGORITHM
+KST = timezone(timedelta(hours=9))
+
+
+def _now_kst():
+    return datetime.now(KST).replace(tzinfo = None)
 
 # JWT 토큰 재발급
 async def refresh_access_token_services(conn: Connection, refresh_token: str, redis_client):
@@ -84,8 +89,7 @@ async def token_login_services(data: UserLogin, conn: Connection, redis_client):
         ex = expire_seconds
     )
 
-    KST = timezone(timedelta(hours=9))
-    current_time = datetime.now(KST)
+    current_time = _now_kst()
 
     await insert_user_log(
         conn = conn,
@@ -101,8 +105,7 @@ async def token_logout_services(conn: Connection, redis_client, user_index: int)
 
     await redis_client.delete(f"refresh:user:{user_index}")
 
-    KST = timezone(timedelta(hours=9))
-    current_time = datetime.now(KST)
+    current_time = _now_kst()
     
     await insert_user_log(
         conn = conn,

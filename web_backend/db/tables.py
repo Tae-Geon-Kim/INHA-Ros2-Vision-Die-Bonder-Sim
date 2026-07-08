@@ -40,4 +40,19 @@ CREATE TABLE IF NOT EXISTS vision_align_logs (
     offset_theta FLOAT DEFAULT 0.0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_work_history_start_time
+    ON work_history(start_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_robot_error_logs_error_time
+    ON robot_error_logs(error_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_robot_error_logs_history_id
+    ON robot_error_logs(history_id);
+
+CREATE INDEX IF NOT EXISTS idx_vision_align_logs_created_at
+    ON vision_align_logs(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_vision_align_logs_history_id
+    ON vision_align_logs(history_id);
 """
