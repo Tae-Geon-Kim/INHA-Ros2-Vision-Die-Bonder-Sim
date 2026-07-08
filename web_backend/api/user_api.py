@@ -7,7 +7,6 @@ from asyncpg import Connection
 from web_backend.core.security import get_current_user
 from web_backend.core.rate_limit import create_rate_limiter
 from web_backend.db.postgres_connection import get_db
-from web_backend.db.redis_connection import get_redis
 
 from web_backend.schemas.common_schemas import CommonResponse
 from web_backend.schemas.user_schemas import UserLogin
@@ -36,7 +35,6 @@ router = APIRouter()
 async def refresh_access_token(
     response: Response,
     refresh_token: str | None = Cookie(default = None),
-    redis_client = Depends(get_redis),
     conn: Connection = Depends(get_db)
 ):
 
@@ -46,7 +44,7 @@ async def refresh_access_token(
             detail = "Refresh Token이 존재하지 않습니다."
         )
     
-    new_access = await refresh_access_token_services(conn, refresh_token, redis_client)
+    new_access = await refresh_access_token_services(conn, refresh_token)
 
     response.set_cookie(key = "access_token", value = new_access, httponly = True, samesite = "lax")
 
@@ -69,10 +67,9 @@ async def refresh_access_token(
 async def token_login(
     data: UserLogin,
     response: Response,
-    redis_client = Depends(get_redis),
     conn: Connection = Depends(get_db)
 ):
-    access_token, refresh_token = await token_login_services(data, conn, redis_client)
+    access_token, refresh_token = await token_login_services(data, conn)
 
     response.set_cookie(key = "access_token", value = access_token, httponly = True, samesite = "lax")
     response.set_cookie(key = "refresh_token", value = refresh_token, httponly = True, samesite = "lax")
@@ -93,11 +90,10 @@ async def token_login(
 )
 async def token_logout(
     response: Response,
-    redis_client = Depends(get_redis),
     current_user: dict = Depends(get_current_user),
     conn: Connection = Depends(get_db)
 ):
-    await token_logout_services(conn, redis_client, current_user['index'])
+    await token_logout_services(conn, current_user['index'])
     
     response.delete_cookie(key = "access_token", httponly = True, samesite = "lax")
     response.delete_cookie(key = "refresh_token", httponly = True, samesite = "lax")

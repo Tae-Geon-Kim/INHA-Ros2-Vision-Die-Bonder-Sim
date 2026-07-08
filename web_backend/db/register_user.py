@@ -15,11 +15,8 @@ async def create_initial_user():
             "INITIAL_USER_ID와 INITIAL_USER_PASSWORD를 .env에 설정해주세요."
         )
 
-    # 비밀번호 해싱
     hashed_password = hash_password(raw_password)
-    print(f"[*] 생성된 해시값: {hashed_password}")
 
-    # DB 연결
     conn = await asyncpg.connect(
         user=db_settings.DB_USER,
         password=db_settings.DB_PASSWORD,
@@ -33,12 +30,12 @@ async def create_initial_user():
             """
             INSERT INTO "user" (id, password)
             VALUES ($1, $2)
+            ON CONFLICT (id)
+            DO UPDATE SET password = EXCLUDED.password
             """,
             user_id, hashed_password
         )
-        print(f"[+] 성공적으로 '{user_id}' 계정이 DB에 추가되었습니다!")
-    except asyncpg.exceptions.UniqueViolationError:
-        print(f"[-] 이미 존재하는 아이디입니다.")
+        print(f"[+] '{user_id}' 계정이 .env 기준으로 동기화되었습니다.")
     finally:
         await conn.close()
 

@@ -16,3 +16,9 @@ __pycache__/
 .vscode/
 
 .venv/
+
+# 5. Frontend dependencies/build output
+node_modules/
+dist/
+web_frontend/node_modules/
+web_frontend/dist/
