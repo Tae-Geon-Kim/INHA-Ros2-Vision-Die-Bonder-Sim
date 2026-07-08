@@ -119,7 +119,8 @@
   <parent link="x_link_1"/>
   <child link="y_link_1"/>
   <axis xyz="0.0 -1.0 0.0"/>
-  <limit upper="0.4" lower="-0.4" effort="100" velocity="100"/>
+  <limit upper="0.4" lower="-0.4" effort="30" velocity="0.2"/>
+  <dynamics damping="25.0" friction="2.0"/>
 </joint>
 
 <joint name="joint_z" type="prismatic">
@@ -127,7 +128,8 @@
   <parent link="y_link_1"/>
   <child link="z_link_1"/>
   <axis xyz="0.0 0.0 1.0"/>
-  <limit upper="0.1" lower="-0.115" effort="100" velocity="100"/>
+  <limit upper="0.1" lower="-0.115" effort="80" velocity="0.25"/>
+  <dynamics damping="3.0" friction="0.05"/>
 </joint>
 
 <joint name="joint_theta" type="continuous">
@@ -135,6 +137,7 @@
   <parent link="z_link_1"/>
   <child link="theta_link_1"/>
   <axis xyz="-0.0 0.0 -1.0"/>
+  <dynamics damping="0.2" friction="0.05"/>
 </joint>
 
 <joint name="joint_x" type="prismatic">
@@ -142,7 +145,8 @@
   <parent link="base_link"/>
   <child link="x_link_1"/>
   <axis xyz="1.0 0.0 0.0"/>
-  <limit upper="0.4" lower="-0.4" effort="100" velocity="100"/>
+  <limit upper="0.4" lower="-0.4" effort="40" velocity="0.2"/>
+  <dynamics damping="30.0" friction="2.0"/>
 </joint>
 
 <gazebo reference="theta_link_1">
@@ -255,27 +259,27 @@
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_x</joint_name>
     <topic>/model/robot_system/joint/joint_x/cmd_pos</topic>
-    <p_gain>1000.0</p_gain>
+    <p_gain>30.0</p_gain>
     <i_gain>0.0</i_gain>
-    <d_gain>50.0</d_gain> 
+    <d_gain>8.0</d_gain> 
   </plugin>
 
   <plugin filename="libignition-gazebo-joint-position-controller-system.so"
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_y</joint_name>
     <topic>/model/robot_system/joint/joint_y/cmd_pos</topic>
-    <p_gain>300.0</p_gain>
+    <p_gain>25.0</p_gain>
     <i_gain>0.0</i_gain>
-    <d_gain>15.0</d_gain>
+    <d_gain>7.0</d_gain>
   </plugin>
 
   <plugin filename="libignition-gazebo-joint-position-controller-system.so"
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_z</joint_name>
     <topic>/model/robot_system/joint/joint_z/cmd_pos</topic>
-    <p_gain>500.0</p_gain>
-    <i_gain>1.0</i_gain>
-    <d_gain>5.0</d_gain>
+    <p_gain>80.0</p_gain>
+    <i_gain>0.0</i_gain>
+    <d_gain>8.0</d_gain>
   </plugin>
 </gazebo>
 
@@ -284,9 +288,9 @@
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_theta</joint_name>
     <topic>/model/robot_system/joint/joint_theta/cmd_pos</topic>
-    <p_gain>1.0</p_gain>
+    <p_gain>0.3</p_gain>
     <i_gain>0.0</i_gain>
-    <d_gain>0.1</d_gain>
+    <d_gain>0.03</d_gain>
   </plugin>
 </gazebo>
 
