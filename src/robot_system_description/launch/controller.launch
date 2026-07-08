@@ -1,7 +1,7 @@
 <launch>
 
 <rosparam file="$(find robot_system_description)/launch/controller.yaml" command="load"/>
-<node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" ns="robot_system" args="½½¶óÀÌ´õ 10_position_controller ½½¶óÀÌ´õ 11_position_controller È¸Àü 12_position_controller ½½¶óÀÌ´õ 13_position_controller joint_state_controller "/>
+<node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" ns="robot_system" args="ï¿½ï¿½ï¿½ï¿½ï¿½Ì´ï¿½ 10_position_controller ï¿½ï¿½ï¿½ï¿½ï¿½Ì´ï¿½ 11_position_controller È¸ï¿½ï¿½ 12_position_controller ï¿½ï¿½ï¿½ï¿½ï¿½Ì´ï¿½ 13_position_controller joint_state_controller "/>
 <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="false" output="screen">
   <remap from="/joint_states" to="/robot_system/joint_states"/>
 </node>
