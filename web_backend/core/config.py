@@ -1,5 +1,10 @@
-import os
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
 
 class DBSettings(BaseSettings):
     DB_USER: str
@@ -11,7 +16,8 @@ class DBSettings(BaseSettings):
     DB_MIN_SIZE: int = 5
     
     model_config = SettingsConfigDict(
-        env_file = os.path.join(os.path.dirname(__file__), ".env"),
+        env_file = str(ENV_FILE),
+        env_file_encoding = "utf-8",
         extra = "ignore"
     )
 
@@ -23,7 +29,11 @@ class JWTSettings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     
-    model_config = SettingsConfigDict(env_file = ".env", extra = "ignore")
+    model_config = SettingsConfigDict(
+        env_file = str(ENV_FILE),
+        env_file_encoding = "utf-8",
+        extra = "ignore"
+    )
     
 jwt_settings = JWTSettings()
 
@@ -33,7 +43,8 @@ class RedisSettings(BaseSettings):
     REDIS_PASSWORD: str | None = None
 
     model_config = SettingsConfigDict(
-        env_file = os.path.join(os.path.dirname(__file__), ".env"),
+        env_file = str(ENV_FILE),
+        env_file_encoding = "utf-8",
         extra = "ignore"
     )
 
@@ -49,8 +60,21 @@ class LogSettings(BaseSettings):
     DATEFMT: str
 
     model_config = SettingsConfigDict(
-        env_file = os.path.join(os.path.dirname(__file__), ".env"),
+        env_file = str(ENV_FILE),
+        env_file_encoding = "utf-8",
         extra = "ignore"
     )
 
 log_settings = LogSettings()
+
+class InitialUserSettings(BaseSettings):
+    INITIAL_USER_ID: str | None = None
+    INITIAL_USER_PASSWORD: str | None = None
+
+    model_config = SettingsConfigDict(
+        env_file = str(ENV_FILE),
+        env_file_encoding = "utf-8",
+        extra = "ignore"
+    )
+
+initial_user_settings = InitialUserSettings()
