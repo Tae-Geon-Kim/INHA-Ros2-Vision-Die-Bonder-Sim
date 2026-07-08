@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'main_controller = robot_control_pkg.main_controller:main',
         ],
     },
 )
