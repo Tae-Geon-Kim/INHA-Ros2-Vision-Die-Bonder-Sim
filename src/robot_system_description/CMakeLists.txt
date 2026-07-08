@@ -12,13 +12,14 @@ install(DIRECTORY
   meshes
   urdf
   materials
+  launch
   DESTINATION share/${PROJECT_NAME}
 )
 
-# launch 폴더 안에 있는 파일들도 잊지 말고 같이 빌드(설치)해 달라는 명령어입니다.
-install(DIRECTORY
-  launch
-  DESTINATION share/${PROJECT_NAME}
+install(PROGRAMS
+  launch/die_bonder_commander.py
+  launch/send_target_pose.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()
