@@ -180,7 +180,7 @@
       </camera>
       <always_on>1</always_on>
       <visualize>false</visualize>
-      <pose> 0.0045  0.0045 -0.0505 0 1.5708 1.5708</pose>
+      <pose> 0.006  0.006 -0.0435 0 1.5708 1.5708</pose>
     </sensor>
   </gazebo>
   <gazebo reference="theta_link_1">
@@ -200,7 +200,7 @@
       </camera>
       <always_on>1</always_on>
       <visualize>false</visualize>
-      <pose> -0.0045  0.0045 -0.0505 0 1.5708 1.5708</pose>
+      <pose> -0.006  0.006 -0.0435 0 1.5708 1.5708</pose>
     </sensor>
   </gazebo>
   <gazebo reference="theta_link_1">
@@ -220,7 +220,7 @@
       </camera>
       <always_on>1</always_on>
       <visualize>false</visualize>
-      <pose> -0.0045  -0.0045 -0.0505 0 1.5708 1.5708</pose>
+      <pose> -0.006  -0.006 -0.0435 0 1.5708 1.5708</pose>
     </sensor>
   </gazebo>
   <gazebo reference="theta_link_1">
@@ -240,7 +240,7 @@
       </camera>
       <always_on>1</always_on>
       <visualize>false</visualize>
-      <pose> 0.0045  -0.0045 -0.0505 0 1.5708 1.5708</pose>
+      <pose> 0.006  -0.006 -0.0435 0 1.5708 1.5708</pose>
     </sensor>
   </gazebo>
   <gazebo>
@@ -331,5 +331,35 @@
         </pbr>
       </material>
     </visual>
+  </gazebo>
+  <link name="red_check_chip_link">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.011 0.011 0.0001"/>
+      </geometry>
+      <material name="red_color">
+        <color rgba="1.0 0.0 0.0 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.011 0.011 0.0001"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.001"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <inertia ixx="1e-8" ixy="0" ixz="0" iyy="1e-8" iyz="0" izz="1e-8"/>
+    </inertial>
+  </link>
+  <joint name="world_to_red_check_chip" type="fixed">
+    <parent link="world"/>
+    <child link="red_check_chip_link"/>
+    <origin rpy="0 0 0" xyz="0.14 0 0.153"/>
+  </joint>
+  <gazebo reference="red_check_chip_link">
+    <material>Gazebo/Red</material>
   </gazebo>
 </robot>
