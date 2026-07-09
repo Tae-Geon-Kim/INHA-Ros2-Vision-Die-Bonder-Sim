@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { getStoredApiBase, robotLogApi } from "../api/api.js";
+import { formatHourBucket, formatTimeLabel, timestampOf } from "../utils/format.js";
 
 function groupBy(items, keySelector) {
   return items.reduce((acc, item) => {
@@ -17,35 +18,60 @@ function toChartRows(grouped, nameKey = "name", valueKey = "value") {
   }));
 }
 
-function toHourBucket(value) {
-  if (!value) return "unknown";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "unknown";
-  return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`;
-}
-
 function buildTimeline(work, errors, align) {
   const grouped = {};
 
   work.forEach((item) => {
-    const key = toHourBucket(item.start_time);
+    const key = formatHourBucket(item.start_time);
     grouped[key] = grouped[key] || { time: key, work: 0, errors: 0, align: 0 };
     grouped[key].work += 1;
   });
 
   errors.forEach((item) => {
-    const key = toHourBucket(item.error_time);
+    const key = formatHourBucket(item.error_time);
     grouped[key] = grouped[key] || { time: key, work: 0, errors: 0, align: 0 };
     grouped[key].errors += 1;
   });
 
   align.forEach((item) => {
-    const key = toHourBucket(item.created_at);
+    const key = formatHourBucket(item.created_at);
     grouped[key] = grouped[key] || { time: key, work: 0, errors: 0, align: 0 };
     grouped[key].align += 1;
   });
 
   return Object.values(grouped).sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function buildAlignmentConvergence(align) {
+  return [...align]
+    .sort((a, b) => {
+      const aTime = timestampOf(a.created_at);
+      const bTime = timestampOf(b.created_at);
+      if (aTime !== bTime) return aTime - bTime;
+      return (a.align_id || 0) - (b.align_id || 0);
+    })
+    .map((item) => ({
+      time: formatTimeLabel(item.created_at),
+      dx: Number(item.offset_x || 0),
+      dy: Number(item.offset_y || 0),
+      dtheta: Number(item.offset_theta || 0),
+      process_step: item.process_step,
+      camera_type: item.camera_type,
+      history_id: item.history_id,
+    }));
+}
+
+function symmetricDomain(rows) {
+  const maxAbs = rows.reduce((currentMax, row) => {
+    return Math.max(
+      currentMax,
+      Math.abs(row.dx || 0),
+      Math.abs(row.dy || 0),
+      Math.abs(row.dtheta || 0),
+    );
+  }, 0);
+  const padded = Math.max(maxAbs * 1.15, 1);
+  return [-padded, padded];
 }
 
 export const useRobotLogStore = create((set, get) => ({
@@ -94,7 +120,10 @@ export const useRobotLogStore = create((set, get) => ({
 
   getCharts() {
     const { work, errors, align } = get();
+    const alignmentConvergence = buildAlignmentConvergence(align);
     return {
+      alignmentConvergence,
+      alignmentDomain: symmetricDomain(alignmentConvergence),
       timeline: buildTimeline(work, errors, align),
       errorFrequency: toChartRows(groupBy(errors, (item) => item.error_level || "UNKNOWN")),
       statusDistribution: toChartRows(groupBy(work, (item) => item.status || "UNKNOWN")),
