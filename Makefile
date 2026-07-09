@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 
 ROS_SETUP ?= /opt/ros/humble/setup.bash
+GAZEBO_ENV := IGN_IP=127.0.0.1 GZ_IP=127.0.0.1 IGN_PARTITION=inha_die_bonder GZ_PARTITION=inha_die_bonder
 
 GPU_USER ?= team05
 GPU_HOST ?= 165.246.170.53
@@ -81,31 +82,31 @@ ros-build: ## Build ROS2 workspace locally.
 	source $(ROS_SETUP) && colcon build --symlink-install
 
 gazebo: ## Run Gazebo without the camera-specific launch.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo.launch.py
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo.launch.py
 
 gazebo-camera: ## Run Gazebo with camera topics for vision alignment.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo_camera.launch.py
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo_camera.launch.py
 
 joint-bridge: ## Run local joint command bridge.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core joint_bridge.launch.py
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core joint_bridge.launch.py
 
 vision-bridge: ## Run local OpenCV camera vision alignment bridge.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=$(VISION_PROCESS) place_mode:=$(PLACE_MODE) auto_command:=$(AUTO_COMMAND) backend_log_url:=$(BACKEND_LOG_URL) history_id:=$(HISTORY_ID) pixel_size_x_mm:=$(PIXEL_SIZE_X) pixel_size_y_mm:=$(PIXEL_SIZE_Y)
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=$(VISION_PROCESS) place_mode:=$(PLACE_MODE) auto_command:=$(AUTO_COMMAND) backend_log_url:=$(BACKEND_LOG_URL) history_id:=$(HISTORY_ID) pixel_size_x_mm:=$(PIXEL_SIZE_X) pixel_size_y_mm:=$(PIXEL_SIZE_Y)
 
 vision-bridge-auto: ## Run local vision alignment bridge and publish correction commands.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=$(VISION_PROCESS) place_mode:=$(PLACE_MODE) auto_command:=true backend_log_url:=$(BACKEND_LOG_URL) history_id:=$(HISTORY_ID) pixel_size_x_mm:=$(PIXEL_SIZE_X) pixel_size_y_mm:=$(PIXEL_SIZE_Y)
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=$(VISION_PROCESS) place_mode:=$(PLACE_MODE) auto_command:=true backend_log_url:=$(BACKEND_LOG_URL) history_id:=$(HISTORY_ID) pixel_size_x_mm:=$(PIXEL_SIZE_X) pixel_size_y_mm:=$(PIXEL_SIZE_Y)
 
 model-list: ## List Ignition/Gazebo models locally.
-	source $(ROS_SETUP) && source install/setup.bash && ign model --list
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ign model --list
 
 safe: ## Move robot to a safe pose locally.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller move $(MOVE_X) $(MOVE_Y) $(MOVE_Z) --theta-deg $(MOVE_THETA_DEG)
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller move $(MOVE_X) $(MOVE_Y) $(MOVE_Z) --theta-deg $(MOVE_THETA_DEG)
 
 chip-reset: ## Reset chip pose locally.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller chip_reset $(CHIP_X) $(CHIP_Y)
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller chip_reset $(CHIP_X) $(CHIP_Y)
 
 demo: ## Run local pick/place demo.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo --pick-x $(PICK_X) --pick-y $(PICK_Y) --place-x $(PLACE_X) --place-y $(PLACE_Y) --safe-z $(DEMO_SAFE_Z) --contact-z $(CONTACT_Z) --settle-sec $(SETTLE_SEC)
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo --pick-x $(PICK_X) --pick-y $(PICK_Y) --place-x $(PLACE_X) --place-y $(PLACE_Y) --safe-z $(DEMO_SAFE_Z) --contact-z $(CONTACT_Z) --settle-sec $(SETTLE_SEC)
 
 range-demo: ## Run local joint range demo.
-	source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller range_demo --settle-sec $(SETTLE_SEC)
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller range_demo --settle-sec $(SETTLE_SEC)
