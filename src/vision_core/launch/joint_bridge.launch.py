@@ -30,7 +30,7 @@ def generate_launch_description():
             name="pose_command_adapter",
             parameters=[{
                 "input_unit": "mm",
-                "coordinate_frame": "chip",
+                "coordinate_frame": "gripper_abs",
                 "steps": 80,
                 "period": 0.01,
                 "hold": 0.15,

@@ -23,18 +23,18 @@ PIXEL_SIZE_Y ?= 1.0
 
 MOVE_X ?= 0
 MOVE_Y ?= 0
-MOVE_Z ?= 80
+MOVE_Z ?= 100
 MOVE_THETA_DEG ?= 0
 
-CHIP_X ?= 0
-CHIP_Y ?= 0
+CHIP_X ?= 500
+CHIP_Y ?= 400
 
-PICK_X ?= 0
-PICK_Y ?= 0
-PLACE_X ?= 200
+PICK_X ?= 500
+PICK_Y ?= 400
+PLACE_X ?= 0
 PLACE_Y ?= 0
-DEMO_SAFE_Z ?= 60
-CONTACT_Z ?= 15
+DEMO_SAFE_Z ?= 100
+CONTACT_Z ?= 50.1
 SETTLE_SEC ?= 3.0
 
 .PHONY: help \
@@ -49,7 +49,7 @@ help: ## Show available make targets.
 	@printf "  make gazebo-camera\n"
 	@printf "  make joint-bridge\n"
 	@printf "  make vision-bridge VISION_PROCESS=pick\n"
-	@printf "  make demo PICK_X=0 PICK_Y=0 PLACE_X=200 PLACE_Y=0\n\n"
+	@printf "  make demo PICK_X=500 PICK_Y=400 PLACE_X=0 PLACE_Y=0\n\n"
 
 .venv/bin/python:
 	python3 -m venv .venv
