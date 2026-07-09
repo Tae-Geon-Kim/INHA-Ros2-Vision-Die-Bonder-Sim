@@ -20,6 +20,7 @@ def generate_launch_description():
     pkg_share = Path(get_package_share_directory("robot_system_description"))
     install_share = str(pkg_share.parent)
     robot_urdf = str(pkg_share / "urdf" / "robot_system_compiled.urdf")
+    red_chip_sdf = str(pkg_share / "models" / "red_check_chip" / "model.sdf")
 
     gazebo = ExecuteProcess(
         cmd=["ign", "gazebo", "-r", "empty.sdf"],
@@ -47,6 +48,31 @@ def generate_launch_description():
         ],
     )
 
+    spawn_red_chip = TimerAction(
+        period=6.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    "ros2",
+                    "run",
+                    "ros_gz_sim",
+                    "create",
+                    "-file",
+                    red_chip_sdf,
+                    "-name",
+                    "red_check_chip",
+                    "-x",
+                    "0.14",
+                    "-y",
+                    "0.0",
+                    "-z",
+                    "0.2501",
+                ],
+                output="screen",
+            ),
+        ],
+    )
+
     return LaunchDescription([
         *GAZEBO_TRANSPORT_ENV,
         SetEnvironmentVariable(
@@ -59,4 +85,5 @@ def generate_launch_description():
         ),
         gazebo,
         spawn_robot,
+        spawn_red_chip,
     ])

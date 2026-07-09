@@ -3,6 +3,7 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import time
 
 import rclpy
@@ -11,7 +12,19 @@ from geometry_msgs.msg import Pose
 
 
 STATE_PATH = Path(os.environ.get("ROBOT_CONTROL_STATE", "/tmp/robot_control_pose_state.json"))
-DEFAULT_STATE = {"x": 0.0, "y": 0.0, "z": 50.0, "theta_deg": 0.0}
+VACUUM_ON = True
+VACUUM_OFF = False
+DEFAULT_STATE = {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 50.0,
+    "theta_deg": 0.0,
+    "vacuum_attached": VACUUM_OFF,
+    "chip_x": 0.0,
+    "chip_y": 0.0,
+    "chip_z": 0.0,
+    "chip_theta_deg": 0.0,
+}
 
 
 def load_state():
@@ -22,27 +35,65 @@ def load_state():
             "y": float(data.get("y", DEFAULT_STATE["y"])),
             "z": float(data.get("z", DEFAULT_STATE["z"])),
             "theta_deg": float(data.get("theta_deg", DEFAULT_STATE["theta_deg"])),
+            "vacuum_attached": bool(data.get(
+                "vacuum_attached",
+                DEFAULT_STATE["vacuum_attached"],
+            )),
+            "chip_x": float(data.get("chip_x", DEFAULT_STATE["chip_x"])),
+            "chip_y": float(data.get("chip_y", DEFAULT_STATE["chip_y"])),
+            "chip_z": float(data.get("chip_z", DEFAULT_STATE["chip_z"])),
+            "chip_theta_deg": float(data.get(
+                "chip_theta_deg",
+                DEFAULT_STATE["chip_theta_deg"],
+            )),
         }
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return DEFAULT_STATE.copy()
 
 
-def save_state(x, y, z, theta_deg):
-    STATE_PATH.write_text(
-        json.dumps({
-            "x": float(x),
-            "y": float(y),
-            "z": float(z),
-            "theta_deg": float(theta_deg),
-        }),
-        encoding="utf-8",
-    )
+def save_state(
+    x,
+    y,
+    z,
+    theta_deg,
+    vacuum_attached=None,
+    chip_x=None,
+    chip_y=None,
+    chip_z=None,
+    chip_theta_deg=None,
+):
+    state = load_state()
+    state.update({
+        "x": float(x),
+        "y": float(y),
+        "z": float(z),
+        "theta_deg": float(theta_deg),
+    })
+
+    optional_values = {
+        "vacuum_attached": vacuum_attached,
+        "chip_x": chip_x,
+        "chip_y": chip_y,
+        "chip_z": chip_z,
+        "chip_theta_deg": chip_theta_deg,
+    }
+    for key, value in optional_values.items():
+        if value is not None:
+            state[key] = bool(value) if key == "vacuum_attached" else float(value)
+
+    STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
 
 
 def set_pose_yaw(msg, theta_deg):
     theta_rad = math.radians(theta_deg)
     msg.orientation.z = math.sin(theta_rad / 2.0)
     msg.orientation.w = math.cos(theta_rad / 2.0)
+
+
+def env_flag(name, default=False):
+    default_value = "1" if default else "0"
+    value = os.environ.get(name, default_value).strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
 class MainControllerNode(Node):
@@ -58,8 +109,24 @@ class MainControllerNode(Node):
         
         # 수직 방향(Z) 제어 높이
         self.HOVER_Z = 50.0   # 이동 시 충돌 방지용 공중 높이(mm)
-        self.PRESS_Z = 5.0    # 칩 픽업 및 본딩 시 접촉 높이(mm)
+        self.PRESS_Z = 15.0   # 칩 픽업 및 본딩 시 데모 접촉 높이(mm)
+        self.MIN_CONTACT_Z = float(os.environ.get("ROBOT_CONTROL_MIN_CONTACT_Z", "15.0"))
         self.MOVE_SETTLE_SEC = 3.5
+
+        # Gazebo 시연용 빨간 칩 모델 제어 설정
+        self.GAZEBO_WORLD = os.environ.get("ROBOT_CONTROL_GAZEBO_WORLD", "empty")
+        self.RED_CHIP_MODEL = os.environ.get("ROBOT_CONTROL_RED_CHIP_MODEL", "red_check_chip")
+        self.CHIP_WORLD_CENTER_X_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_X_M", "0.14"))
+        self.CHIP_WORLD_CENTER_Y_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_Y_M", "0.0"))
+        self.CHIP_SURFACE_WORLD_Z_M = float(os.environ.get("ROBOT_CONTROL_CHIP_SURFACE_WORLD_Z_M", "0.25005"))
+        self.CHIP_MIN_CARRIED_HEIGHT_M = float(os.environ.get("ROBOT_CONTROL_CHIP_MIN_CARRIED_HEIGHT_M", "0.003"))
+        self.WAIT_FOR_CHIP_SERVICE = env_flag("ROBOT_CONTROL_WAIT_FOR_CHIP_SERVICE", False)
+        self.CHIP_SERVICE_TIMEOUT_MS = int(os.environ.get("ROBOT_CONTROL_CHIP_SERVICE_TIMEOUT_MS", "300"))
+        self.COMMAND_LIMITS_MM = {
+            "x": (-400.0, 400.0),
+            "y": (-400.0, 400.0),
+            "z": (-0.5, 214.0),
+        }
 
         # 상태 추적 변수 (로봇의 현재 x, y 좌표를 추적)
         state = load_state()
@@ -67,6 +134,22 @@ class MainControllerNode(Node):
         self.last_sent_y = state["y"]
         self.last_sent_z = state["z"]
         self.last_sent_theta_deg = state["theta_deg"]
+        self.vacuum_attached = VACUUM_ON if state["vacuum_attached"] else VACUUM_OFF
+        self.chip_x = state["chip_x"]
+        self.chip_y = state["chip_y"]
+        self.chip_z = state["chip_z"]
+        self.chip_theta_deg = state["chip_theta_deg"]
+
+    def validate_command_pose(self, x, y, z):
+        values = {"x": x, "y": y, "z": z}
+        for axis, value in values.items():
+            lower, upper = self.COMMAND_LIMITS_MM[axis]
+            if not lower <= float(value) <= upper:
+                self.get_logger().error(
+                    f'{axis}={value}mm는 명령 가능 범위 [{lower}, {upper}]mm 밖입니다.'
+                )
+                return False
+        return True
 
     # 1. 통합 이동 전송 및 위치 기록 함수
     def publish_move(self, x, y, z, theta_deg=None):
@@ -74,12 +157,14 @@ class MainControllerNode(Node):
         로봇에게 이동 명령을 쏘는 동시에, 현재 SW에 로봇의 XY/Z/theta 위치를 저장함.
         이를 통해 'execute_z_press' 명령 시 정확한 위치에서 하강이 가능함.
         """
+        if not self.validate_command_pose(x, y, z):
+            return False
+
         target_theta = self.last_sent_theta_deg if theta_deg is None else theta_deg
         self.last_sent_x = x
         self.last_sent_y = y
         self.last_sent_z = z
         self.last_sent_theta_deg = target_theta
-        save_state(x, y, z, target_theta)
         
         msg = Pose()
         msg.position.x = float(x)
@@ -92,6 +177,120 @@ class MainControllerNode(Node):
         self.get_logger().debug(
             f' Command Sent: X={x}, Y={y}, Z={z}, theta={target_theta}deg'
         )
+
+        if self.vacuum_attached:
+            self.move_red_chip_with_tool(x, y, z, target_theta)
+        else:
+            self.save_current_state()
+        return True
+
+    def save_current_state(self):
+        save_state(
+            self.last_sent_x,
+            self.last_sent_y,
+            self.last_sent_z,
+            self.last_sent_theta_deg,
+            vacuum_attached=self.vacuum_attached,
+            chip_x=self.chip_x,
+            chip_y=self.chip_y,
+            chip_z=self.chip_z,
+            chip_theta_deg=self.chip_theta_deg,
+        )
+
+    def command_xy_to_world(self, x_mm, y_mm):
+        return (
+            self.CHIP_WORLD_CENTER_X_M + float(x_mm) * 0.001,
+            self.CHIP_WORLD_CENTER_Y_M + float(y_mm) * 0.001,
+        )
+
+    def carried_chip_world_z(self, z_mm):
+        carried_height = max(float(z_mm) * 0.001, self.CHIP_MIN_CARRIED_HEIGHT_M)
+        return self.CHIP_SURFACE_WORLD_Z_M + carried_height
+
+    def set_red_chip_pose(self, x_m, y_m, z_m, theta_deg=0.0):
+        theta_rad = math.radians(theta_deg)
+        req = (
+            f'name: "{self.RED_CHIP_MODEL}" '
+            f'position {{ x: {x_m:.6f} y: {y_m:.6f} z: {z_m:.6f} }} '
+            f'orientation {{ x: 0 y: 0 z: {math.sin(theta_rad / 2.0):.9f} '
+            f'w: {math.cos(theta_rad / 2.0):.9f} }}'
+        )
+        cmd = [
+            "ign",
+            "service",
+            "-s",
+            f"/world/{self.GAZEBO_WORLD}/set_pose",
+            "--reqtype",
+            "ignition.msgs.Pose",
+            "--reptype",
+            "ignition.msgs.Boolean",
+            "--timeout",
+            str(self.CHIP_SERVICE_TIMEOUT_MS),
+            "--req",
+            req,
+        ]
+
+        try:
+            if not self.WAIT_FOR_CHIP_SERVICE:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.chip_x = x_m
+                self.chip_y = y_m
+                self.chip_z = z_m
+                self.chip_theta_deg = theta_deg
+                self.save_current_state()
+                return True
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=(self.CHIP_SERVICE_TIMEOUT_MS / 1000.0) + 0.5,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            self.get_logger().warn(f'red_check_chip 위치 갱신 실패: {exc}')
+            return False
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            self.get_logger().warn(f'red_check_chip 위치 갱신 실패: {detail}')
+            return False
+
+        self.chip_x = x_m
+        self.chip_y = y_m
+        self.chip_z = z_m
+        self.chip_theta_deg = theta_deg
+        self.save_current_state()
+        return True
+
+    def place_red_chip(self, x_mm, y_mm, theta_deg=0.0):
+        world_x, world_y = self.command_xy_to_world(x_mm, y_mm)
+        return self.set_red_chip_pose(
+            world_x,
+            world_y,
+            self.CHIP_SURFACE_WORLD_Z_M,
+            theta_deg=theta_deg,
+        )
+
+    def move_red_chip_with_tool(self, x_mm, y_mm, z_mm, theta_deg=0.0):
+        world_x, world_y = self.command_xy_to_world(x_mm, y_mm)
+        world_z = self.carried_chip_world_z(z_mm)
+        return self.set_red_chip_pose(
+            world_x,
+            world_y,
+            world_z,
+            theta_deg=theta_deg,
+        )
+
+    def reset_red_chip(self, x_mm=0.0, y_mm=0.0):
+        self.vacuum_attached = VACUUM_OFF
+        self.get_logger().info(f'red_check_chip을 ({x_mm}, {y_mm})mm 위치 표면에 배치합니다.')
+        self.place_red_chip(x_mm, y_mm, theta_deg=0.0)
+        self.save_current_state()
 
     # 거시 카메라를 칩 중앙에 정렬
     def set_camera_center(self, chip_x, chip_y):
@@ -153,6 +352,38 @@ class MainControllerNode(Node):
         self.get_logger().info(f'현재 XY 유지, Z={z}mm로 이동')
         self.publish_move(self.last_sent_x, self.last_sent_y, z)
 
+    def move_relative(self, dx=0.0, dy=0.0, dz=0.0, dtheta_deg=0.0):
+
+        """
+        마지막으로 명령한 위치를 기준으로 상대 이동함.
+        dx/dy/dz 단위는 mm, dtheta_deg 단위는 deg.
+        """
+
+        target_x = self.last_sent_x + dx
+        target_y = self.last_sent_y + dy
+        target_z = self.last_sent_z + dz
+        target_theta = self.last_sent_theta_deg + dtheta_deg
+
+        self.get_logger().info(
+            f'상대 이동: dx={dx}mm, dy={dy}mm, dz={dz}mm, '
+            f'dtheta={dtheta_deg}deg -> '
+            f'({target_x}, {target_y}, {target_z}, {target_theta}deg)'
+        )
+        self.publish_move(target_x, target_y, target_z, theta_deg=target_theta)
+
+    def move_back(self, distance_mm=30.0):
+
+        """
+        작업 좌표계 중심 기준 뒤쪽(-Y) 절대 위치로 이동함.
+        예: distance_mm=30이면 (0, -30, HOVER_Z)로 이동.
+        """
+
+        target_y = -abs(distance_mm)
+        self.get_logger().info(
+            f'절대 이동: 중심 기준 뒤쪽 위치 (0, {target_y}, {self.HOVER_Z})mm'
+        )
+        self.publish_move(0.0, target_y, self.HOVER_Z, theta_deg=0.0)
+
     def move_theta(self, theta_deg):
 
         """
@@ -171,17 +402,42 @@ class MainControllerNode(Node):
         wait_time = self.MOVE_SETTLE_SEC if seconds is None else seconds
         time.sleep(wait_time)
 
+    def resolve_contact_height(self, contact_z):
+        requested_height = self.PRESS_Z if contact_z is None else float(contact_z)
+        if requested_height < self.MIN_CONTACT_Z:
+            self.get_logger().warn(
+                f'contact_z={requested_height}mm는 Z 하한에 너무 가까워 '
+                f'{self.MIN_CONTACT_Z}mm로 보정합니다.'
+            )
+            return self.MIN_CONTACT_Z
+        return requested_height
+
     def vacuum_on(self):
-        self.get_logger().info('vacuum_on: 현재 데모에서는 흡착 동작을 로그로만 처리합니다.')
+        self.vacuum_attached = VACUUM_ON
+        self.get_logger().info('vacuum_on: red_check_chip을 그리퍼에 흡착한 상태로 전환합니다.')
+        self.move_red_chip_with_tool(
+            self.last_sent_x,
+            self.last_sent_y,
+            self.last_sent_z,
+            self.last_sent_theta_deg,
+        )
+        self.save_current_state()
 
     def vacuum_off(self):
-        self.get_logger().info('vacuum_off: 현재 데모에서는 릴리즈 동작을 로그로만 처리합니다.')
+        self.vacuum_attached = VACUUM_OFF
+        self.get_logger().info('vacuum_off: red_check_chip을 현재 XY 위치 표면에 내려놓습니다.')
+        self.place_red_chip(
+            self.last_sent_x,
+            self.last_sent_y,
+            theta_deg=self.last_sent_theta_deg,
+        )
+        self.save_current_state()
 
     def run_pick_place_demo(
         self,
         pick_x=0.0,
         pick_y=0.0,
-        place_x=150.0,
+        place_x=200.0,
         place_y=0.0,
         safe_z=None,
         contact_z=None,
@@ -194,20 +450,21 @@ class MainControllerNode(Node):
         """
 
         safe_height = self.HOVER_Z if safe_z is None else safe_z
-        contact_height = self.PRESS_Z if contact_z is None else contact_z
+        contact_height = self.resolve_contact_height(contact_z)
 
         self.get_logger().info(
             f'pick_place_demo 시작: pick=({pick_x}, {pick_y})mm, '
             f'place=({place_x}, {place_y})mm, safe_z={safe_height}mm, '
             f'contact_z={contact_height}mm'
         )
+        self.reset_red_chip(pick_x, pick_y)
 
         self.get_logger().info('1/8 pick 위치 상공으로 이동')
-        self.publish_move(pick_x, pick_y, safe_height)
+        self.publish_move(pick_x, pick_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('2/8 pick 접촉 높이로 하강')
-        self.publish_move(pick_x, pick_y, contact_height)
+        self.publish_move(pick_x, pick_y, contact_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('3/8 칩 흡착')
@@ -215,15 +472,15 @@ class MainControllerNode(Node):
         time.sleep(0.5)
 
         self.get_logger().info('4/8 pick 위치에서 상승')
-        self.publish_move(pick_x, pick_y, safe_height)
+        self.publish_move(pick_x, pick_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('5/8 place 위치 상공으로 이동')
-        self.publish_move(place_x, place_y, safe_height)
+        self.publish_move(place_x, place_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('6/8 place 접촉 높이로 하강')
-        self.publish_move(place_x, place_y, contact_height)
+        self.publish_move(place_x, place_y, contact_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('7/8 칩 릴리즈')
@@ -231,10 +488,56 @@ class MainControllerNode(Node):
         time.sleep(0.5)
 
         self.get_logger().info('8/8 place 위치에서 상승')
-        self.publish_move(place_x, place_y, safe_height)
+        self.publish_move(place_x, place_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('pick_place_demo 완료')
+
+    def run_three_chip_demo(
+        self,
+        safe_z=None,
+        contact_z=None,
+        settle_sec=None,
+    ):
+
+        """
+        로봇 중심 좌표 (0, 0, 50)mm에서 시작해 칩 3개를 순서대로 pick/place하는 데모.
+        실제 칩/트레이 위치가 확정되면 chip_jobs의 좌표만 교체하면 됨.
+        """
+
+        safe_height = self.HOVER_Z if safe_z is None else safe_z
+        contact_height = self.resolve_contact_height(contact_z)
+        chip_jobs = (
+            ("chip_1", -170.0, -80.0, 170.0, -80.0),
+            ("chip_2", -170.0, 0.0, 170.0, 0.0),
+            ("chip_3", -170.0, 80.0, 170.0, 80.0),
+        )
+
+        self.get_logger().info(
+            f'three_chip_demo 시작: center=(0, 0, {safe_height})mm'
+        )
+        self.publish_move(0.0, 0.0, safe_height, theta_deg=0.0)
+        self.wait_for_motion(settle_sec)
+
+        for label, pick_x, pick_y, place_x, place_y in chip_jobs:
+            self.get_logger().info(
+                f'{label}: pick=({pick_x}, {pick_y})mm -> '
+                f'place=({place_x}, {place_y})mm'
+            )
+            self.run_pick_place_demo(
+                pick_x=pick_x,
+                pick_y=pick_y,
+                place_x=place_x,
+                place_y=place_y,
+                safe_z=safe_height,
+                contact_z=contact_height,
+                settle_sec=settle_sec,
+            )
+
+        self.get_logger().info('중심 위치로 복귀')
+        self.publish_move(0.0, 0.0, safe_height, theta_deg=0.0)
+        self.wait_for_motion(settle_sec)
+        self.get_logger().info('three_chip_demo 완료')
 
     def run_theta_demo(self, settle_sec=None):
 
@@ -264,7 +567,7 @@ class MainControllerNode(Node):
             (0.0, -60.0, 50.0, 0.0, 'Y -60mm'),
             (0.0, 0.0, 50.0, 0.0, 'Y 복귀'),
             (0.0, 0.0, 80.0, 0.0, 'Z 80mm'),
-            (0.0, 0.0, 5.0, 0.0, 'Z 5mm'),
+            (0.0, 0.0, 15.0, 0.0, 'Z 15mm'),
             (0.0, 0.0, 50.0, 0.0, 'Z 복귀'),
             (0.0, 0.0, 50.0, 90.0, 'theta +90deg'),
             (0.0, 0.0, 50.0, -90.0, 'theta -90deg'),
@@ -345,6 +648,15 @@ def build_parser():
     theta_parser = subparsers.add_parser('theta')
     theta_parser.add_argument('theta_deg', type=float)
 
+    relative_parser = subparsers.add_parser('relative')
+    relative_parser.add_argument('dx', type=float)
+    relative_parser.add_argument('dy', type=float)
+    relative_parser.add_argument('dz', type=float)
+    relative_parser.add_argument('--dtheta-deg', type=float, default=0.0)
+
+    back_parser = subparsers.add_parser('back')
+    back_parser.add_argument('distance_mm', type=float, nargs='?', default=30.0)
+
     camera_parser = subparsers.add_parser('camera_center')
     camera_parser.add_argument('chip_x', type=float)
     camera_parser.add_argument('chip_y', type=float)
@@ -353,8 +665,14 @@ def build_parser():
     transfer_parser.add_argument('x', type=float)
     transfer_parser.add_argument('y', type=float)
 
+    chip_reset_parser = subparsers.add_parser('chip_reset')
+    chip_reset_parser.add_argument('x', type=float, nargs='?', default=0.0)
+    chip_reset_parser.add_argument('y', type=float, nargs='?', default=0.0)
+
     subparsers.add_parser('press')
     subparsers.add_parser('lift')
+    subparsers.add_parser('vacuum_on')
+    subparsers.add_parser('vacuum_off')
     subparsers.add_parser('z_demo')
 
     theta_demo_parser = subparsers.add_parser('theta_demo')
@@ -369,11 +687,16 @@ def build_parser():
     pick_place_parser = subparsers.add_parser('pick_place_demo')
     pick_place_parser.add_argument('--pick-x', type=float, default=0.0)
     pick_place_parser.add_argument('--pick-y', type=float, default=0.0)
-    pick_place_parser.add_argument('--place-x', type=float, default=150.0)
+    pick_place_parser.add_argument('--place-x', type=float, default=200.0)
     pick_place_parser.add_argument('--place-y', type=float, default=0.0)
     pick_place_parser.add_argument('--safe-z', type=float, default=50.0)
-    pick_place_parser.add_argument('--contact-z', type=float, default=5.0)
+    pick_place_parser.add_argument('--contact-z', type=float, default=15.0)
     pick_place_parser.add_argument('--settle-sec', type=float, default=None)
+
+    three_chip_parser = subparsers.add_parser('three_chip_demo')
+    three_chip_parser.add_argument('--safe-z', type=float, default=50.0)
+    three_chip_parser.add_argument('--contact-z', type=float, default=15.0)
+    three_chip_parser.add_argument('--settle-sec', type=float, default=None)
 
     subparsers.add_parser('demo')
 
@@ -389,18 +712,33 @@ def run_command(node, args):
         node.move_z(args.height_mm)
     elif args.command == 'theta':
         node.move_theta(args.theta_deg)
+    elif args.command == 'relative':
+        node.move_relative(
+            dx=args.dx,
+            dy=args.dy,
+            dz=args.dz,
+            dtheta_deg=args.dtheta_deg,
+        )
+    elif args.command == 'back':
+        node.move_back(args.distance_mm)
     elif args.command == 'camera_center':
         node.set_camera_center(args.chip_x, args.chip_y)
     elif args.command == 'transfer':
         node.transfer_position(args.x, args.y)
+    elif args.command == 'chip_reset':
+        node.reset_red_chip(args.x, args.y)
     elif args.command == 'press':
         node.execute_z_press()
     elif args.command == 'lift':
         node.lift_to_safety()
+    elif args.command == 'vacuum_on':
+        node.vacuum_on()
+    elif args.command == 'vacuum_off':
+        node.vacuum_off()
     elif args.command == 'z_demo':
         node.move_z(80.0)
         time.sleep(1.5)
-        node.move_z(5.0)
+        node.move_z(15.0)
         time.sleep(1.5)
         node.move_z(80.0)
     elif args.command == 'theta_demo':
@@ -415,6 +753,12 @@ def run_command(node, args):
             pick_y=args.pick_y,
             place_x=args.place_x,
             place_y=args.place_y,
+            safe_z=args.safe_z,
+            contact_z=args.contact_z,
+            settle_sec=args.settle_sec,
+        )
+    elif args.command == 'three_chip_demo':
+        node.run_three_chip_demo(
             safe_z=args.safe_z,
             contact_z=args.contact_z,
             settle_sec=args.settle_sec,

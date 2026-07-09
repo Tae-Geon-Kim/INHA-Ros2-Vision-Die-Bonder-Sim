@@ -9,6 +9,7 @@ def generate_launch_description():
         "/model/robot_system/joint/joint_y/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_z/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_theta/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
+        "/model/robot_system/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model",
     ]
 
     return LaunchDescription([
@@ -30,9 +31,18 @@ def generate_launch_description():
             parameters=[{
                 "input_unit": "mm",
                 "coordinate_frame": "chip",
-                "steps": 120,
-                "period": 0.02,
-                "hold": 0.8,
+                "steps": 80,
+                "period": 0.01,
+                "hold": 0.15,
+                "feedback_enabled": True,
+                "joint_state_topic": "/model/robot_system/joint_state",
+                "arrival_timeout": 8.0,
+                "initial_feedback_timeout": 0.5,
+                "arrival_tolerance": 0.002,
+                "z_tolerance": 0.008,
+                "theta_tolerance": 0.02,
+                "feedback_stale_timeout": 1.0,
+                "settle_samples": 5,
             }],
             output="screen",
         ),
