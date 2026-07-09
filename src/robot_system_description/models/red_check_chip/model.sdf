@@ -30,9 +30,14 @@
           </box>
         </geometry>
         <material>
-          <ambient>1.0 0.05 0.05 1</ambient>
-          <diffuse>1.0 0.05 0.05 1</diffuse>
-          <specular>0.2 0.2 0.2 1</specular>
+          <ambient>0.75 0.75 0.75 1</ambient>
+          <diffuse>0.8 0.8 0.8 1</diffuse>
+          <specular>0.25 0.25 0.25 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://robot_system_description/materials/textures/chip_pattern.png</albedo_map>
+            </metal>
+          </pbr>
         </material>
       </visual>
     </link>

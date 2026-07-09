@@ -112,6 +112,9 @@ class MainControllerNode(Node):
         self.CHIP_THICKNESS_MM = float(os.environ.get("ROBOT_CONTROL_CHIP_THICKNESS_MM", "0.1"))
         self.SUBSTRATE_THICKNESS_MM = float(os.environ.get("ROBOT_CONTROL_SUBSTRATE_THICKNESS_MM", "5.0"))
         self.HOVER_Z = float(os.environ.get("ROBOT_CONTROL_HOVER_Z_MM", "100.0"))
+        self.GRIPPER_HOME_X = float(os.environ.get("ROBOT_CONTROL_GRIPPER_HOME_X_MM", "140.0"))
+        self.GRIPPER_HOME_Y = float(os.environ.get("ROBOT_CONTROL_GRIPPER_HOME_Y_MM", "0.0"))
+        self.GRIPPER_HOME_Z = float(os.environ.get("ROBOT_CONTROL_GRIPPER_HOME_Z_MM", "155.0"))
         self.PRESS_Z = float(os.environ.get(
             "ROBOT_CONTROL_PICK_Z_MM",
             str(self.BASE_TOP_Z + self.CHIP_THICKNESS_MM),
@@ -123,7 +126,7 @@ class MainControllerNode(Node):
         ))
         self.MIN_CONTACT_Z = float(os.environ.get(
             "ROBOT_CONTROL_MIN_CONTACT_Z",
-            str(self.BASE_TOP_Z),
+            str(self.BASE_TOP_Z - 5.0),
         ))
         self.MOVE_SETTLE_SEC = 3.5
 
@@ -140,6 +143,14 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_DETACH_TOPIC",
             "/model/robot_system/vacuum/detach",
         )
+        self.SUBSTRATE_ATTACH_TOPIC = os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_ATTACH_TOPIC",
+            "/model/robot_system/substrate_bond/attach",
+        )
+        self.SUBSTRATE_DETACH_TOPIC = os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_DETACH_TOPIC",
+            "/model/robot_system/substrate_bond/detach",
+        )
         self.PICKER_CONTACT_TOPIC = os.environ.get(
             "ROBOT_CONTROL_PICKER_CONTACT_TOPIC",
             "/model/robot_system/picker/contact",
@@ -150,13 +161,30 @@ class MainControllerNode(Node):
         )
         contact_topics = os.environ.get(
             "ROBOT_CONTROL_PICKER_CONTACT_TOPICS",
-            f"{self.PICKER_CONTACT_TOPIC},{fallback_picker_contact_topic}",
+            f"{fallback_picker_contact_topic},{self.PICKER_CONTACT_TOPIC}",
         )
         self.PICKER_CONTACT_TOPICS = []
         for topic in contact_topics.split(","):
             topic = topic.strip()
             if topic and topic not in self.PICKER_CONTACT_TOPICS:
                 self.PICKER_CONTACT_TOPICS.append(topic)
+        self.SUBSTRATE_CONTACT_TOPIC = os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_CONTACT_TOPIC",
+            "/model/robot_system/substrate/contact",
+        )
+        fallback_substrate_contact_topic = (
+            f"/world/{self.GAZEBO_WORLD}/model/robot_system/link/"
+            "substrate_link/sensor/substrate_contact_sensor/contact"
+        )
+        substrate_contact_topics = os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_CONTACT_TOPICS",
+            f"{fallback_substrate_contact_topic},{self.SUBSTRATE_CONTACT_TOPIC}",
+        )
+        self.SUBSTRATE_CONTACT_TOPICS = []
+        for topic in substrate_contact_topics.split(","):
+            topic = topic.strip()
+            if topic and topic not in self.SUBSTRATE_CONTACT_TOPICS:
+                self.SUBSTRATE_CONTACT_TOPICS.append(topic)
         self.discovered_picker_contact_topics = []
         self.last_contact_topic_discovery = 0.0
         self.CONTACT_TOPIC_DISCOVERY_INTERVAL_SEC = 2.0
@@ -173,10 +201,27 @@ class MainControllerNode(Node):
             for token in chip_contact_tokens.split(",")
             if token.strip()
         ]
+        substrate_contact_tokens = os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_CONTACT_TOKENS",
+            "substrate_link_collision,substrate_link",
+        )
+        self.SUBSTRATE_CONTACT_TOKENS = [
+            token.strip().lower()
+            for token in substrate_contact_tokens.split(",")
+            if token.strip()
+        ]
         self.PICKER_CONTACT_TIMEOUT_SEC = float(os.environ.get(
             "ROBOT_CONTROL_PICKER_CONTACT_TIMEOUT_SEC",
             "6.0",
         ))
+        self.SUBSTRATE_CONTACT_TIMEOUT_SEC = float(os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_CONTACT_TIMEOUT_SEC",
+            "6.0",
+        ))
+        self.REQUIRE_SUBSTRATE_CONTACT = env_flag(
+            "ROBOT_CONTROL_REQUIRE_SUBSTRATE_CONTACT",
+            True,
+        )
         self.CONTACT_SEARCH_STEP_MM = float(os.environ.get(
             "ROBOT_CONTROL_CONTACT_SEARCH_STEP_MM",
             "1.0",
@@ -184,6 +229,10 @@ class MainControllerNode(Node):
         self.CONTACT_SEARCH_DEPTH_MM = float(os.environ.get(
             "ROBOT_CONTROL_CONTACT_SEARCH_DEPTH_MM",
             "8.0",
+        ))
+        self.CONTACT_SEARCH_SETTLE_SEC = float(os.environ.get(
+            "ROBOT_CONTROL_CONTACT_SEARCH_SETTLE_SEC",
+            "3.5",
         ))
         self.CHIP_WORLD_CENTER_X_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_X_M", "0.0"))
         self.CHIP_WORLD_CENTER_Y_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_Y_M", "0.0"))
@@ -198,7 +247,7 @@ class MainControllerNode(Node):
         self.COMMAND_LIMITS_MM = {
             "x": (-260.0, 540.0),
             "y": (-400.0, 400.0),
-            "z": (40.0, 120.0),
+            "z": (self.GRIPPER_HOME_Z - 115.0, self.GRIPPER_HOME_Z + 115.0),
         }
 
         # 상태 추적 변수 (로봇의 현재 x, y 좌표를 추적)
@@ -207,13 +256,18 @@ class MainControllerNode(Node):
         self.last_sent_y = state["y"]
         self.last_sent_z = state["z"]
         self.last_sent_theta_deg = state["theta_deg"]
-        self.vacuum_attached = VACUUM_ON if state["vacuum_attached"] else VACUUM_OFF
+        restore_vacuum_state = env_flag("ROBOT_CONTROL_RESTORE_VACUUM_STATE", False)
+        self.vacuum_attached = (
+            VACUUM_ON
+            if restore_vacuum_state and state["vacuum_attached"]
+            else VACUUM_OFF
+        )
         self.chip_x = state["chip_x"]
         self.chip_y = state["chip_y"]
         self.chip_z = state["chip_z"]
         self.chip_theta_deg = state["chip_theta_deg"]
 
-    def publish_empty_ign_topic(self, topic):
+    def publish_empty_ign_topic(self, topic, duration_sec=0.3):
         cmd = [
             "ign",
             "topic",
@@ -223,6 +277,8 @@ class MainControllerNode(Node):
             "ignition.msgs.Empty",
             "-p",
             "unused: true",
+            "-d",
+            str(duration_sec),
         ]
         try:
             result = subprocess.run(
@@ -230,7 +286,7 @@ class MainControllerNode(Node):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=1.0,
+                timeout=duration_sec + 1.5,
                 check=False,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
@@ -244,11 +300,11 @@ class MainControllerNode(Node):
 
         return True
 
-    def contact_output_has_picker_chip_pair(self, output):
+    def contact_output_has_token_pair(self, output, first_tokens, second_tokens):
         normalized = output.lower()
-        if self.PICKER_COLLISION_TOKEN not in normalized:
+        if not any(token in normalized for token in first_tokens):
             return False
-        if not any(token in normalized for token in self.CHIP_CONTACT_TOKENS):
+        if not any(token in normalized for token in second_tokens):
             return False
 
         contact_blocks = normalized.split("contact {")
@@ -256,14 +312,28 @@ class MainControllerNode(Node):
             return True
 
         for block in contact_blocks[1:]:
-            if self.PICKER_COLLISION_TOKEN not in block:
+            if not any(token in block for token in first_tokens):
                 continue
-            if any(token in block for token in self.CHIP_CONTACT_TOKENS):
+            if any(token in block for token in second_tokens):
                 return True
 
         return False
 
-    def read_picker_contact_topic_once(self, topic, timeout_sec=0.25):
+    def contact_output_has_picker_chip_pair(self, output):
+        return self.contact_output_has_token_pair(
+            output,
+            [self.PICKER_COLLISION_TOKEN],
+            self.CHIP_CONTACT_TOKENS,
+        )
+
+    def contact_output_has_substrate_chip_pair(self, output):
+        return self.contact_output_has_token_pair(
+            output,
+            self.SUBSTRATE_CONTACT_TOKENS,
+            self.CHIP_CONTACT_TOKENS,
+        )
+
+    def read_contact_topic_once(self, topic, matcher, timeout_sec=0.25):
         cmd = [
             "ign",
             "topic",
@@ -285,11 +355,25 @@ class MainControllerNode(Node):
         except subprocess.TimeoutExpired:
             return False
         except (FileNotFoundError, OSError) as exc:
-            self.get_logger().warn(f'picker contact topic 읽기 실패({topic}): {exc}')
+            self.get_logger().warn(f'contact topic 읽기 실패({topic}): {exc}')
             return False
 
         output = f"{result.stdout}\n{result.stderr}".lower()
-        return self.contact_output_has_picker_chip_pair(output)
+        return matcher(output)
+
+    def read_picker_contact_topic_once(self, topic, timeout_sec=0.25):
+        return self.read_contact_topic_once(
+            topic,
+            self.contact_output_has_picker_chip_pair,
+            timeout_sec=timeout_sec,
+        )
+
+    def read_substrate_contact_topic_once(self, topic, timeout_sec=0.25):
+        return self.read_contact_topic_once(
+            topic,
+            self.contact_output_has_substrate_chip_pair,
+            timeout_sec=timeout_sec,
+        )
 
     def refresh_picker_contact_topics(self):
         now = time.monotonic()
@@ -336,9 +420,17 @@ class MainControllerNode(Node):
 
     def read_picker_contact_once(self, timeout_sec=0.25):
         topics = self.get_picker_contact_topics()
-        per_topic_timeout = max(0.05, timeout_sec / len(topics))
+        per_topic_timeout = max(0.2, timeout_sec / len(topics))
         for topic in topics:
             if self.read_picker_contact_topic_once(topic, timeout_sec=per_topic_timeout):
+                return True
+        return False
+
+    def read_substrate_contact_once(self, timeout_sec=0.25):
+        topics = self.SUBSTRATE_CONTACT_TOPICS
+        per_topic_timeout = max(0.2, timeout_sec / len(topics))
+        for topic in topics:
+            if self.read_substrate_contact_topic_once(topic, timeout_sec=per_topic_timeout):
                 return True
         return False
 
@@ -362,6 +454,25 @@ class MainControllerNode(Node):
         self.get_logger().info('현재 위치에서는 picker-chip contact가 아직 감지되지 않았습니다.')
         return False
 
+    def wait_for_substrate_contact(self, timeout_sec=None):
+        if not self.REQUIRE_SUBSTRATE_CONTACT:
+            return True
+
+        wait_timeout = self.SUBSTRATE_CONTACT_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+        deadline = time.monotonic() + wait_timeout
+        self.get_logger().info(
+            'chip-substrate 실제 접촉 대기: '
+            f'{", ".join(self.SUBSTRATE_CONTACT_TOPICS)}'
+        )
+        while time.monotonic() < deadline:
+            remaining = max(0.05, min(0.25, deadline - time.monotonic()))
+            if self.read_substrate_contact_once(timeout_sec=remaining):
+                self.get_logger().info('chip-substrate contact 감지됨')
+                return True
+
+        self.get_logger().info('현재 위치에서는 chip-substrate contact가 아직 감지되지 않았습니다.')
+        return False
+
     def search_picker_contact_downward(self):
         if not self.REQUIRE_PICKER_CONTACT:
             return True
@@ -372,6 +483,10 @@ class MainControllerNode(Node):
         start_z = self.last_sent_z
         searched = 0.0
         lower_limit = max(self.COMMAND_LIMITS_MM["z"][0], self.MIN_CONTACT_Z)
+        self.get_logger().info(
+            f'contact 탐색 시작: {start_z:.2f}mm -> {lower_limit:.2f}mm '
+            f'(step={self.CONTACT_SEARCH_STEP_MM:.2f}mm)'
+        )
 
         while searched < self.CONTACT_SEARCH_DEPTH_MM:
             next_z = max(
@@ -393,8 +508,7 @@ class MainControllerNode(Node):
             ):
                 return False
 
-            self.wait_for_motion(0.25)
-            if self.wait_for_picker_contact(timeout_sec=0.5):
+            if self.wait_for_picker_contact(timeout_sec=self.CONTACT_SEARCH_SETTLE_SEC):
                 return True
 
             if next_z <= lower_limit:
@@ -404,6 +518,12 @@ class MainControllerNode(Node):
 
     def attach_red_chip_to_picker(self):
         if not self.USE_DETACHABLE_JOINT:
+            return False
+
+        if self.REQUIRE_PICKER_CONTACT and not self.read_picker_contact_once(timeout_sec=0.5):
+            self.get_logger().warn(
+                'attach 직전 picker-chip contact 재확인 실패: attach 요청을 보내지 않습니다.'
+            )
             return False
 
         attached = self.publish_empty_ign_topic(self.ATTACH_TOPIC)
@@ -423,6 +543,47 @@ class MainControllerNode(Node):
                 f'Gazebo fixed joint detach 요청: {self.DETACH_TOPIC}'
             )
         return detached
+
+    def attach_chip_to_substrate(self):
+        if not self.USE_DETACHABLE_JOINT:
+            return False
+
+        if self.REQUIRE_SUBSTRATE_CONTACT and not self.read_substrate_contact_once(timeout_sec=0.5):
+            self.get_logger().warn(
+                'substrate attach 직전 chip-substrate contact 재확인 실패: attach 요청을 보내지 않습니다.'
+            )
+            return False
+
+        attached = self.publish_empty_ign_topic(self.SUBSTRATE_ATTACH_TOPIC)
+        if attached:
+            self.get_logger().info(
+                f'Gazebo substrate bond attach 요청: {self.SUBSTRATE_ATTACH_TOPIC}'
+            )
+        return attached
+
+    def detach_chip_from_substrate(self):
+        if not self.USE_DETACHABLE_JOINT:
+            return False
+
+        detached = self.publish_empty_ign_topic(self.SUBSTRATE_DETACH_TOPIC)
+        if detached:
+            self.get_logger().info(
+                f'Gazebo substrate bond detach 요청: {self.SUBSTRATE_DETACH_TOPIC}'
+            )
+        return detached
+
+    def force_vacuum_detached(self, reason):
+        self.vacuum_attached = VACUUM_OFF
+        if self.USE_DETACHABLE_JOINT:
+            self.get_logger().info(f'vacuum detach 초기화: {reason}')
+            self.detach_red_chip_from_picker()
+        self.save_current_state()
+
+    def force_substrate_bond_detached(self, reason):
+        if self.USE_DETACHABLE_JOINT:
+            self.get_logger().info(f'substrate bond detach 초기화: {reason}')
+            self.detach_chip_from_substrate()
+        self.save_current_state()
 
     def validate_command_pose(self, x, y, z):
         values = {"x": x, "y": y, "z": z}
@@ -592,7 +753,8 @@ class MainControllerNode(Node):
 
     def reset_red_chip(self, x_mm=500.0, y_mm=400.0, z_mm=None):
         chip_z = self.CHIP_REST_Z if z_mm is None else float(z_mm)
-        self.vacuum_attached = VACUUM_OFF
+        self.force_vacuum_detached('chip_reset 전에 기존 detachable joint를 해제')
+        self.force_substrate_bond_detached('chip_reset 전에 기존 substrate bond를 해제')
         self.get_logger().info(
             f'{self.RED_CHIP_MODEL}을 절대좌표 ({x_mm}, {y_mm}, {chip_z})mm에 배치합니다.'
         )
@@ -765,6 +927,19 @@ class MainControllerNode(Node):
         self.save_current_state()
         return True
 
+    def substrate_bond_on(self):
+        self.get_logger().info('substrate_bond_on: chip-substrate 접촉 확인 후 고정합니다.')
+        if not self.wait_for_substrate_contact():
+            self.get_logger().warn(
+                'chip-substrate contact 최종 미감지: substrate bond attach를 수행하지 않습니다.'
+            )
+            return False
+
+        if self.USE_DETACHABLE_JOINT:
+            return self.attach_chip_to_substrate()
+
+        return True
+
     def run_pick_place_demo(
         self,
         pick_x=500.0,
@@ -796,42 +971,60 @@ class MainControllerNode(Node):
             f'pick=({pick_x}, {pick_y}, {pick_height})mm, '
             f'chip_bottom_z={chip_height}mm, '
             f'place=({place_x}, {place_y}, {place_height})mm, '
-            f'safe_z={safe_height}mm'
+            f'safe_z={safe_height}mm, '
+            f'home=({self.GRIPPER_HOME_X}, {self.GRIPPER_HOME_Y}, {self.GRIPPER_HOME_Z})mm'
         )
         self.reset_red_chip(pick_x, pick_y, chip_height)
 
-        self.get_logger().info('1/8 pick 위치 상공으로 이동')
+        self.get_logger().info('1/9 pick 위치 상공으로 이동')
         self.publish_move(pick_x, pick_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
-        self.get_logger().info('2/8 pick 접촉 높이로 하강')
+        self.get_logger().info('2/9 pick 접촉 높이로 하강')
         self.publish_move(pick_x, pick_y, pick_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
-        self.get_logger().info('3/8 칩 흡착')
+        self.get_logger().info('3/9 칩 흡착')
         if not self.vacuum_on():
             self.get_logger().warn('pick 접촉/흡착 실패: chip을 움직이지 않고 pick_place_demo를 중단합니다.')
             return False
         time.sleep(0.5)
 
-        self.get_logger().info('4/8 pick 위치에서 상승')
+        self.get_logger().info('4/9 pick 위치에서 상승')
         self.publish_move(pick_x, pick_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
-        self.get_logger().info('5/8 place 위치 상공으로 이동')
+        self.get_logger().info('5/9 place 위치 상공으로 이동')
         self.publish_move(place_x, place_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
-        self.get_logger().info('6/8 place 접촉 높이로 하강')
+        self.get_logger().info('6/9 place 접촉 높이로 하강')
         self.publish_move(place_x, place_y, place_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
-        self.get_logger().info('7/8 칩 릴리즈')
+        self.get_logger().info('7/9 substrate 접촉 후 칩 접착')
+        if not self.substrate_bond_on():
+            self.get_logger().warn(
+                'place 접촉/접착 실패: vacuum을 유지한 채 place 위치 상공으로 복귀합니다.'
+            )
+            self.publish_move(place_x, place_y, safe_height, theta_deg=0.0)
+            self.wait_for_motion(settle_sec)
+            return False
+        time.sleep(0.3)
+
+        self.get_logger().info('8/9 칩 릴리즈')
         self.vacuum_off()
         time.sleep(0.5)
 
-        self.get_logger().info('8/8 place 위치에서 상승')
+        self.get_logger().info('9/9 gripper 기준점으로 복귀')
         self.publish_move(place_x, place_y, safe_height, theta_deg=0.0)
+        self.wait_for_motion(settle_sec)
+        self.publish_move(
+            self.GRIPPER_HOME_X,
+            self.GRIPPER_HOME_Y,
+            self.GRIPPER_HOME_Z,
+            theta_deg=0.0,
+        )
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('pick_place_demo 완료')

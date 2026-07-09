@@ -71,6 +71,42 @@ def generate_launch_description():
         ],
     )
 
+    detach_initial_vacuum = TimerAction(
+        period=8.5,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    "ign",
+                    "topic",
+                    "-t",
+                    "/model/robot_system/vacuum/detach",
+                    "-m",
+                    "ignition.msgs.Empty",
+                    "-p",
+                    "unused: true",
+                    "-d",
+                    "0.3",
+                ],
+                output="screen",
+            ),
+            ExecuteProcess(
+                cmd=[
+                    "ign",
+                    "topic",
+                    "-t",
+                    "/model/robot_system/substrate_bond/detach",
+                    "-m",
+                    "ignition.msgs.Empty",
+                    "-p",
+                    "unused: true",
+                    "-d",
+                    "0.3",
+                ],
+                output="screen",
+            ),
+        ],
+    )
+
     return LaunchDescription([
         *GAZEBO_TRANSPORT_ENV,
         SetEnvironmentVariable(
@@ -84,4 +120,5 @@ def generate_launch_description():
         gazebo,
         spawn_robot,
         spawn_check_chip,
+        detach_initial_vacuum,
     ])

@@ -25,11 +25,11 @@ CHIP_SURFACE_Z = 0.05005
 CHIP_JOINT_X_AT_CENTER = 0.0
 CHIP_JOINT_Y_AT_CENTER = 0.0
 TOOL_FRAME_Z_AT_ZERO = 0.215
-TOOL_REFERENCE_Z_OFFSET = -0.0505
+TOOL_REFERENCE_Z_OFFSET = -0.060
 TOOL_REFERENCE_Z_AT_ZERO = TOOL_FRAME_Z_AT_ZERO + TOOL_REFERENCE_Z_OFFSET
 GRIPPER_ABS_X_AT_ZERO = 0.140
 GRIPPER_ABS_Y_AT_ZERO = 0.0
-GRIPPER_ABS_Z_AT_ZERO = 0.050
+GRIPPER_ABS_Z_AT_ZERO = 0.155
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ def gripper_abs_to_joint_pose(
     """Convert absolute gripper contact coordinates to joint commands.
 
     At joint (0, 0, 0), the picker contact point is treated as
-    (140 mm, 0 mm, 50 mm) in the robot absolute coordinate frame.
+    (140 mm, 0 mm, 155 mm) in the robot absolute coordinate frame.
     """
     return JointPose(
         x=x - GRIPPER_ABS_X_AT_ZERO,
