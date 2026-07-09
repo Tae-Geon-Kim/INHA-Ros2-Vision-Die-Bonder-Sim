@@ -32,6 +32,7 @@ setup(
             'pick_place_demo = vision_core.pick_place_demo:main',
             'pose_command_adapter = vision_core.pose_command_adapter:main',
             'robot_move = vision_core.robot_move:main',
+            'vision_alignment_bridge = vision_core.vision_alignment_bridge:main',
         ],
     },
 )

@@ -10,10 +10,6 @@ GAZEBO_TRANSPORT_ENV = [
     SetEnvironmentVariable(name="GZ_IP", value="127.0.0.1"),
     SetEnvironmentVariable(name="IGN_PARTITION", value="inha_die_bonder"),
     SetEnvironmentVariable(name="GZ_PARTITION", value="inha_die_bonder"),
-    SetEnvironmentVariable(name="LIBGL_ALWAYS_SOFTWARE", value="1"),
-    SetEnvironmentVariable(name="MESA_LOADER_DRIVER_OVERRIDE", value="llvmpipe"),
-    SetEnvironmentVariable(name="GALLIUM_DRIVER", value="llvmpipe"),
-    SetEnvironmentVariable(name="QT_QPA_PLATFORM", value="offscreen"),
 ]
 
 
@@ -29,8 +25,6 @@ def generate_launch_description():
             "ign",
             "gazebo",
             "-r",
-            "-s",
-            "--headless-rendering",
             world_sdf,
         ],
         output="screen",
