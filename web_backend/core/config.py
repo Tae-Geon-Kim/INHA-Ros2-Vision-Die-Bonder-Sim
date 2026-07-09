@@ -37,19 +37,6 @@ class JWTSettings(BaseSettings):
     
 jwt_settings = JWTSettings()
 
-class RedisSettings(BaseSettings):
-    REDIS_HOST: str
-    REDIS_PORT: int
-    REDIS_PASSWORD: str | None = None
-
-    model_config = SettingsConfigDict(
-        env_file = str(ENV_FILE),
-        env_file_encoding = "utf-8",
-        extra = "ignore"
-    )
-
-redis_settings = RedisSettings()
-
 class LogSettings(BaseSettings):
     LOGGING_DIR: str
     FILE_NAME: str
@@ -78,3 +65,22 @@ class InitialUserSettings(BaseSettings):
     )
 
 initial_user_settings = InitialUserSettings()
+
+class FrontendSettings(BaseSettings):
+    FRONTEND_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @property
+    def allowed_origins(self):
+        return [
+            origin.strip()
+            for origin in self.FRONTEND_ORIGINS.split(",")
+            if origin.strip()
+        ]
+
+    model_config = SettingsConfigDict(
+        env_file = str(ENV_FILE),
+        env_file_encoding = "utf-8",
+        extra = "ignore"
+    )
+
+frontend_settings = FrontendSettings()
