@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, Iterator, Tuple
 
@@ -16,6 +17,9 @@ JOINT_LIMITS = {
     "y": (-0.4, 0.4),
     "z": (-0.115, 0.1),
 }
+
+RANGE_DEMO_RATIO = 0.75
+THETA_DEMO_LIMIT = math.radians(180.0 * RANGE_DEMO_RATIO)
 
 CHIP_SURFACE_Z = 0.05005
 CHIP_JOINT_X_AT_CENTER = 0.0
@@ -67,6 +71,14 @@ PRESETS = {
     "pick_down": JointPose(-0.15, 0.12, -0.08, 0.0),
     "place": JointPose(0.25, -0.12, 0.03, 0.0),
     "place_down": JointPose(0.25, -0.12, -0.08, 0.0),
+    "range_x_pos": JointPose(0.4 * RANGE_DEMO_RATIO, 0.0, 0.0, 0.0),
+    "range_x_neg": JointPose(-0.4 * RANGE_DEMO_RATIO, 0.0, 0.0, 0.0),
+    "range_y_pos": JointPose(0.0, 0.4 * RANGE_DEMO_RATIO, 0.0, 0.0),
+    "range_y_neg": JointPose(0.0, -0.4 * RANGE_DEMO_RATIO, 0.0, 0.0),
+    "range_z_high": JointPose(0.0, 0.0, 0.1 * RANGE_DEMO_RATIO, 0.0),
+    "range_z_low": JointPose(0.0, 0.0, -0.115 * RANGE_DEMO_RATIO, 0.0),
+    "range_theta_pos": JointPose(0.0, 0.0, 0.0, THETA_DEMO_LIMIT),
+    "range_theta_neg": JointPose(0.0, 0.0, 0.0, -THETA_DEMO_LIMIT),
 }
 
 DEMO_SEQUENCE = (
@@ -77,6 +89,22 @@ DEMO_SEQUENCE = (
     "place",
     "place_down",
     "place",
+    "home",
+)
+
+RANGE_DEMO_SEQUENCE = (
+    "home",
+    "range_x_pos",
+    "range_x_neg",
+    "home",
+    "range_y_pos",
+    "range_y_neg",
+    "home",
+    "range_z_high",
+    "range_z_low",
+    "home",
+    "range_theta_pos",
+    "range_theta_neg",
     "home",
 )
 

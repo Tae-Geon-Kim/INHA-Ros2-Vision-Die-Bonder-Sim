@@ -278,6 +278,37 @@ class MainControllerNode(Node):
 
         self.get_logger().info('joint_demo 완료')
 
+    def run_range_demo(self, settle_sec=None):
+
+        """
+        팀 시연용으로 X/Y/Z/theta를 약 75% 구동범위까지 순서대로 움직이는 데모.
+        X/Y/Z 입력 단위는 /robot/command_pose 기준 mm, theta는 deg임.
+        """
+
+        self.get_logger().info('range_demo 시작: 각 관절 약 75% 구동범위 시연')
+        demo_steps = (
+            (0.0, 0.0, 50.0, 0.0, '기준 위치'),
+            (300.0, 0.0, 50.0, 0.0, 'X +300mm'),
+            (-300.0, 0.0, 50.0, 0.0, 'X -300mm'),
+            (0.0, 0.0, 50.0, 0.0, 'X 복귀'),
+            (0.0, 300.0, 50.0, 0.0, 'Y +300mm'),
+            (0.0, -300.0, 50.0, 0.0, 'Y -300mm'),
+            (0.0, 0.0, 50.0, 0.0, 'Y 복귀'),
+            (0.0, 0.0, 190.0, 0.0, 'Z 상단 약 75%'),
+            (0.0, 0.0, 28.0, 0.0, 'Z 하단 약 75%'),
+            (0.0, 0.0, 50.0, 0.0, 'Z 복귀'),
+            (0.0, 0.0, 50.0, 135.0, 'theta +135deg'),
+            (0.0, 0.0, 50.0, -135.0, 'theta -135deg'),
+            (0.0, 0.0, 50.0, 0.0, 'theta 복귀'),
+        )
+
+        for x, y, z, theta_deg, label in demo_steps:
+            self.get_logger().info(label)
+            self.publish_move(x, y, z, theta_deg=theta_deg)
+            self.wait_for_motion(settle_sec)
+
+        self.get_logger().info('range_demo 완료')
+
 def main(args=None):
     rclpy.init(args=args)
     node = MainControllerNode()
@@ -332,6 +363,9 @@ def build_parser():
     joint_demo_parser = subparsers.add_parser('joint_demo')
     joint_demo_parser.add_argument('--settle-sec', type=float, default=None)
 
+    range_demo_parser = subparsers.add_parser('range_demo')
+    range_demo_parser.add_argument('--settle-sec', type=float, default=None)
+
     pick_place_parser = subparsers.add_parser('pick_place_demo')
     pick_place_parser.add_argument('--pick-x', type=float, default=0.0)
     pick_place_parser.add_argument('--pick-y', type=float, default=0.0)
@@ -373,6 +407,8 @@ def run_command(node, args):
         node.run_theta_demo(settle_sec=args.settle_sec)
     elif args.command == 'joint_demo':
         node.run_joint_demo(settle_sec=args.settle_sec)
+    elif args.command == 'range_demo':
+        node.run_range_demo(settle_sec=args.settle_sec)
     elif args.command == 'pick_place_demo':
         node.run_pick_place_demo(
             pick_x=args.pick_x,

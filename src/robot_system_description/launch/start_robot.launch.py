@@ -1,48 +1,57 @@
 import os
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import ExecuteProcess, TimerAction
+
+
+def prepend_env_path(env, name, path):
+    path = str(path)
+    current_value = env.get(name)
+    env[name] = f"{path}:{current_value}" if current_value else path
+
 
 def generate_launch_description():
-    # 1. 현재 시스템의 환경 변수 복사하기
     gazebo_env = dict(os.environ)
-    
-    # 2. 3D 원본 파일이 있는 src 폴더 경로 계산
-    ws_src_path = os.path.expanduser('~/colcon_ws/src')
-    
-    # 3. 기존 경로가 있다면 그 앞에 우리 경로를 붙여주고(Append), 없으면 새로 지정
-    if 'IGN_GAZEBO_RESOURCE_PATH' in gazebo_env:
-        gazebo_env['IGN_GAZEBO_RESOURCE_PATH'] = f"{ws_src_path}:{gazebo_env['IGN_GAZEBO_RESOURCE_PATH']}"
-    else:
-        gazebo_env['IGN_GAZEBO_RESOURCE_PATH'] = ws_src_path
+
+    package_share = Path(get_package_share_directory("robot_system_description"))
+    install_share = package_share.parent
+    robot_urdf = package_share / "urdf" / "robot_system_compiled.urdf"
+
+    prepend_env_path(gazebo_env, "IGN_GAZEBO_RESOURCE_PATH", install_share)
+    prepend_env_path(gazebo_env, "GZ_SIM_RESOURCE_PATH", install_share)
+
+    gazebo = ExecuteProcess(
+        cmd=["ign", "gazebo", "empty.sdf"],
+        env=gazebo_env,
+        output="screen",
+    )
+
+    spawn_robot = TimerAction(
+        period=5.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    "ros2",
+                    "run",
+                    "ros_gz_sim",
+                    "create",
+                    "-file",
+                    str(robot_urdf),
+                    "-name",
+                    "robot_system",
+                    "-z",
+                    "0.05",
+                ],
+                output="screen",
+            ),
+        ],
+    )
 
     return LaunchDescription([
-        # 가제보 프로세스를 켤 때, 위에서 만든 환경 변수(gazebo_env)를 직접 주입합니다. (타이밍 이슈 해결)
-        ExecuteProcess(
-            cmd=['ign', 'gazebo', 'empty.sdf'],
-            env=gazebo_env,
-            output='screen'
-        ),
-        
-        # 로봇 소환 (워크스페이스 기준 경로 단단히 고정)
-        ExecuteProcess(
-            cmd=['ros2', 'run', 'ros_gz_sim', 'create', 
-                 '-file', 'src/robot_system_description/urdf/robot_system_compiled.urdf', 
-                 '-name', 'robot_system', 
-                 '-z', '0.05'],
-            cwd=os.path.expanduser('~/colcon_ws'),
-            output='screen'
-        ),
-        
-        # RQT 창 1번 (Micro 카메라 4대 배치용)
-        ExecuteProcess(
-            cmd=['rqt'],
-            output='screen'
-        ),
-        
-        # RQT 창 2번 (Macro 카메라 1대 전용)
-        ExecuteProcess(
-            cmd=['rqt'],
-            output='screen'
-        )
+        gazebo,
+        spawn_robot,
+        ExecuteProcess(cmd=["rqt"], output="screen"),
+        ExecuteProcess(cmd=["rqt"], output="screen"),
     ])
-    
