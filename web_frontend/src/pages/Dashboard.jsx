@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
   ClipboardList,
   Database,
+  Play,
   RefreshCw
 } from "lucide-react";
 import {
@@ -16,6 +17,7 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -28,22 +30,14 @@ import PageHeader from "../components/layout/PageHeader.jsx";
 import StatusBadge from "../components/logs/StatusBadge.jsx";
 import { useAuthStore } from "../state/authStore.js";
 import { useRobotLogStore } from "../state/store.js";
+import { formatDate, formatNumber } from "../utils/format.js";
+import { robotControlApi } from "../api/api.js";
 
 const PIE_COLORS = ["#267a4d", "#376d86", "#a46213", "#a83b3b", "#6b7280"];
 
-function formatDate(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
 export default function Dashboard() {
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoMessage, setDemoMessage] = useState(null);
   const {
     refreshDashboard,
     getMetrics,
@@ -59,6 +53,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     refreshDashboard();
+    const refreshTimer = window.setInterval(refreshDashboard, 3000);
+    return () => window.clearInterval(refreshTimer);
   }, [refreshDashboard]);
 
   useEffect(() => {
@@ -72,6 +68,20 @@ export default function Dashboard() {
   const recentWork = useMemo(() => work.slice(0, 8), [work]);
   const latestErrors = useMemo(() => errors.slice(0, 8), [errors]);
 
+  const startGazeboDemo = async () => {
+    setDemoLoading(true);
+    setDemoMessage(null);
+    try {
+      const response = await robotControlApi.startDemo();
+      setDemoMessage(response?.message || "Gazebo demo started.");
+      await refreshDashboard();
+    } catch (requestError) {
+      setDemoMessage(requestError.message || "Gazebo demo start failed.");
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -79,21 +89,38 @@ export default function Dashboard() {
         title="Robot Log Monitoring"
         description="작업 이력, 로봇 에러, 비전 정렬 로그를 한 화면에서 확인하는 React 기반 대시보드입니다."
         actions={
-          <button
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
-            onClick={refreshDashboard}
-            type="button"
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-4 text-sm font-bold text-white disabled:opacity-60"
+              onClick={startGazeboDemo}
+              type="button"
+              disabled={demoLoading}
+            >
+              <Play size={16} />
+              {demoLoading ? "Starting" : "Start Gazebo Demo"}
+            </button>
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
+              onClick={refreshDashboard}
+              type="button"
+              disabled={loading}
+            >
+              <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
           {error}
+        </div>
+      ) : null}
+
+      {demoMessage ? (
+        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-panel">
+          {demoMessage}
         </div>
       ) : null}
 
@@ -104,6 +131,31 @@ export default function Dashboard() {
         <MetricCard label="Fatal Errors" value={metrics.fatalErrors} icon={AlertTriangle} tone="amber" caption="requires action" />
         <MetricCard label="Align Logs" value={metrics.alignTotal} icon={Database} tone="signal" caption="vision offsets" />
       </section>
+
+      <ChartCard title="Alignment Error Convergence" description="Gazebo 작업 중 기록된 x/y/theta 오차가 0 기준선으로 수렴하는 흐름입니다.">
+        <div className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={charts.alignmentConvergence}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" tick={{ fontSize: 12 }} minTickGap={18} />
+              <YAxis
+                domain={charts.alignmentDomain}
+                tickFormatter={(value) => formatNumber(value, 2)}
+                width={64}
+              />
+              <Tooltip
+                formatter={(value, name) => [formatNumber(value, 4), name]}
+                labelFormatter={(label) => `time ${label}`}
+              />
+              <Legend />
+              <ReferenceLine y={0} stroke="#202822" strokeDasharray="5 5" />
+              <Line type="monotone" dataKey="dx" name="x error" stroke="#267a4d" strokeWidth={3} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="dy" name="y error" stroke="#376d86" strokeWidth={3} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="dtheta" name="theta error" stroke="#a46213" strokeWidth={3} dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </ChartCard>
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)]">
         <ChartCard title="Hourly Log Trend" description="작업 시작, 에러, 비전 정렬 로그를 시간대별로 집계합니다.">

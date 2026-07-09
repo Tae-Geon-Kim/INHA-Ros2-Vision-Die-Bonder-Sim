@@ -2,18 +2,11 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import { Activity, BarChart3, ClipboardList, Cpu, LogOut, TriangleAlert } from "lucide-react";
 
 import Dashboard from "./pages/Dashboard.jsx";
+import ErrorLogs from "./pages/ErrorLogs.jsx";
 import Login from "./pages/Login.jsx";
+import VisionAlign from "./pages/VisionAlign.jsx";
+import WorkHistory from "./pages/WorkHistory.jsx";
 import { useAuthStore } from "./state/authStore.js";
-
-function PlaceholderPage({ title, description }) {
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white p-8 shadow-panel">
-      <p className="text-sm font-bold uppercase tracking-wide text-signal">Coming next</p>
-      <h1 className="mt-2 text-2xl font-black text-ink">{title}</h1>
-      <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">{description}</p>
-    </section>
-  );
-}
 
 function NavItem({ to, icon: Icon, children }) {
   return (
@@ -84,18 +77,9 @@ export default function App() {
         <main className="min-w-0 px-6 py-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route
-              path="/work-history"
-              element={<PlaceholderPage title="Work History" description="작업 이력 목록, 상세 로그, 상태 변경 화면을 독립 페이지로 확장할 자리입니다." />}
-            />
-            <Route
-              path="/errors"
-              element={<PlaceholderPage title="Error Logs" description="에러 로그 검색, 필터링, 생성 폼을 독립 페이지로 확장할 자리입니다." />}
-            />
-            <Route
-              path="/vision-align"
-              element={<PlaceholderPage title="Vision Align" description="카메라별 보정 offset 분석 화면을 독립 페이지로 확장할 자리입니다." />}
-            />
+            <Route path="/work-history" element={<WorkHistory />} />
+            <Route path="/errors" element={<ErrorLogs />} />
+            <Route path="/vision-align" element={<VisionAlign />} />
           </Routes>
         </main>
       </div>

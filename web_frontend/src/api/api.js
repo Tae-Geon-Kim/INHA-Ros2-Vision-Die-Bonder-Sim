@@ -72,6 +72,20 @@ export const robotLogApi = {
   },
 };
 
+export const robotControlApi = {
+  startDemo() {
+    return request("/robot-control/demo/start", { method: "POST" });
+  },
+
+  stopDemo() {
+    return request("/robot-control/demo/stop", { method: "POST" });
+  },
+
+  getDemoStatus() {
+    return request("/robot-control/demo/status");
+  },
+};
+
 export const authApi = {
   login(data, apiBase) {
     return request("/users/login", { method: "POST", body: data, apiBase });
