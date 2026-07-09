@@ -6,6 +6,15 @@ import cv2
 from vision_aligner import VisionAligner
 
 
+WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_TEST_IMAGE_DIR = WORKSPACE_ROOT / "src" / "robot_system_description" / "test_images"
+DEFAULT_MACRO_IMAGE = DEFAULT_TEST_IMAGE_DIR / "answer_macro.jpg"
+DEFAULT_MICRO_IMAGES = [
+    DEFAULT_TEST_IMAGE_DIR / f"answer_micro_{index}.jpg"
+    for index in range(1, 5)
+]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Macro/Micro 카메라 이미지로 비전 정렬 오차를 계산합니다."
@@ -24,13 +33,15 @@ def parse_args():
     )
     parser.add_argument(
         "--image",
-        help="macro 공정에서 사용할 이미지 1장 경로입니다.",
+        default=str(DEFAULT_MACRO_IMAGE),
+        help="macro 공정에서 사용할 이미지 1장 경로입니다. 기본값은 answer_macro.jpg입니다.",
     )
     parser.add_argument(
         "--micro-images",
         nargs=4,
+        default=[str(path) for path in DEFAULT_MICRO_IMAGES],
         metavar=("MICRO_1", "MICRO_2", "MICRO_3", "MICRO_4"),
-        help="pick/place 공정에서 사용할 micro 이미지 4장 경로입니다.",
+        help="pick/place 공정에서 사용할 micro 이미지 4장 경로입니다. 기본값은 answer_micro_1~4.jpg입니다.",
     )
     parser.add_argument(
         "--debug",
