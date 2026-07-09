@@ -326,7 +326,7 @@
         <diffuse>1 1 1 1</diffuse>
         <pbr>
           <metal>
-            <albedo_map>model://robot_system_description/materials/textures/chip_pattern.jpg</albedo_map>
+            <albedo_map>model://robot_system_description/materials/textures/chip_pattern.png</albedo_map>
           </metal>
         </pbr>
       </material>
