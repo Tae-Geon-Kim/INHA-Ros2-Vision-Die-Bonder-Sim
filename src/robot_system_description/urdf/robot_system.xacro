@@ -128,7 +128,7 @@
   <parent link="y_link_1"/>
   <child link="z_link_1"/>
   <axis xyz="0.0 0.0 1.0"/>
-  <limit upper="0.1" lower="-0.115" effort="80" velocity="0.25"/>
+  <limit upper="0.115" lower="-0.115" effort="80" velocity="0.25"/>
   <dynamics damping="3.0" friction="0.05"/>
 </joint>
 
@@ -357,7 +357,7 @@
       <diffuse>1 1 1 1</diffuse>
       <pbr>
         <metal>
-         <albedo_map>model://robot_system_description/materials/textures/chip_pattern.jpg</albedo_map>
+         <albedo_map>model://robot_system_description/materials/textures/chip_pattern.png</albedo_map>
         </metal>
       </pbr>
     </material>
