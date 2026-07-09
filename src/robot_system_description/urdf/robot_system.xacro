@@ -347,7 +347,7 @@
 <joint name="world_to_check_chip" type="fixed">
   <parent link="world"/> 
   <child link="check_chip_link"/>
-  <origin xyz="0.14 0 0.05005" rpy="0 0 0"/>
+  <origin xyz="0.14 0 0.05505" rpy="0 0 0"/>
 </joint>
 
 <gazebo reference="check_chip_link">
@@ -398,6 +398,49 @@
 <gazebo reference="red_check_chip_link">
   <material>Gazebo/Red</material>
 </gazebo>
+
+<link name="substrate_link">
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.02 0.02 0.005"/>
+    </geometry>
+  </visual>
+  
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.02 0.02 0.005"/>
+    </geometry>
+  </collision>
+
+  <inertial>
+    <mass value="0.005"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>
+  </inertial>
+</link> 
+
+<joint name="world_to_substrate" type="fixed">
+  <parent link="world"/> 
+  <child link="substrate_link"/>
+  <origin xyz="0.14 0 0.0525" rpy="0 0 0"/>
+</joint>
+
+<gazebo reference="substrate_link">
+  <visual>
+    <material>
+      <ambient>1 1 1 1</ambient>
+      <diffuse>1 1 1 1</diffuse>
+      <pbr>
+        <metal>
+          <albedo_map>model://robot_system_description/materials/textures/substrate_pattern.png</albedo_map>
+        </metal>
+      </pbr>
+    </material>
+  </visual>
+</gazebo>
+
 
 </robot>
 
