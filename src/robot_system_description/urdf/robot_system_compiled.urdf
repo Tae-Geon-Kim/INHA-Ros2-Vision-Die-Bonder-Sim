@@ -282,11 +282,6 @@
       <d_gain>0.03</d_gain>
     </plugin>
   </gazebo>
-  <gazebo>
-    <plugin filename="libignition-gazebo-sensors-system.so" name="ignition::gazebo::systems::Sensors">
-      <render_engine>ogre2</render_engine>
-    </plugin>
-  </gazebo>
   <gazebo reference="theta_link_1">
     <light name="gripper_led" type="point">
       <pose>0 0 -0.05 0 0 0</pose>
