@@ -1,4 +1,3 @@
-import hashlib 
 from fastapi import HTTPException, status
 from jose import jwt, JWTError, ExpiredSignatureError
 from asyncpg import Connection
@@ -13,15 +12,21 @@ from web_backend.core.security import(
     credentials_exception
 )
 
-from web_backend.models.user_models  import get_info_by_id
+from web_backend.models.user_models  import get_current_user_info, get_info_by_id
 from web_backend.core.config import jwt_settings
 from web_backend.models.user_logs_models import insert_user_log
 
 secret_key = jwt_settings.SECRET_KEY
 algorithm = jwt_settings.ALGORITHM
+KST = timezone(timedelta(hours=9))
+
+
+def _now_kst():
+    return datetime.now(KST).replace(tzinfo = None)
+
 
 # JWT 토큰 재발급
-async def refresh_access_token_services(conn: Connection, refresh_token: str, redis_client):
+async def refresh_access_token_services(conn: Connection, refresh_token: str):
 
     try:
         payload = jwt.decode(refresh_token, secret_key, algorithms = [algorithm])
@@ -29,19 +34,14 @@ async def refresh_access_token_services(conn: Connection, refresh_token: str, re
 
         if user_id is None:
             raise credentials_exception
-        
-        # Redis DB에 저장된 해싱된 토큰 값이 stored_token에
-        stored_token = await redis_client.get(f"refresh:user:{user_id}")
 
-        # front에 받은 refresh_token을 해싱한 값
-        received_token = hashlib.sha256(refresh_token.encode()).hexdigest()
-
-        if not stored_token or stored_token != received_token:
+        user_info = await get_current_user_info(conn, int(user_id))
+        if not user_info:
             raise HTTPException(
                 status_code = status.HTTP_401_UNAUTHORIZED,
-                detail = "인증이 만료되었거나 유효하지 않은 토큰입니다. 다시 로그인해주세요."
+                detail = "존재하지 않는 사용자입니다."
             )
-        
+
         new_access = create_access_token(data = {"sub": str(user_id)})
 
         return new_access
@@ -54,11 +54,11 @@ async def refresh_access_token_services(conn: Connection, refresh_token: str, re
         )
 
     # 다른 모든 JWT error
-    except JWTError:
+    except (JWTError, ValueError):
         raise credentials_exception
 
 # JWT Token 사용자 로그인
-async def token_login_services(data: UserLogin, conn: Connection, redis_client):
+async def token_login_services(data: UserLogin, conn: Connection):
 
     user_info = await login(conn, data) # user의 인덱스 값
 
@@ -74,18 +74,7 @@ async def token_login_services(data: UserLogin, conn: Connection, redis_client):
     access_token = create_access_token(data = {"sub": str(user_num)})
     refresh_token = create_refresh_token(data = {"sub": str(user_num)})
 
-    hashed_refresh_token = hashlib.sha256(refresh_token.encode()).hexdigest()
-
-    expire_seconds = jwt_settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-    
-    await redis_client.set(
-        f"refresh:user:{user_num}", 
-        hashed_refresh_token,
-        ex = expire_seconds
-    )
-
-    KST = timezone(timedelta(hours=9))
-    current_time = datetime.now(KST)
+    current_time = _now_kst()
 
     await insert_user_log(
         conn = conn,
@@ -97,12 +86,9 @@ async def token_login_services(data: UserLogin, conn: Connection, redis_client):
     return access_token, refresh_token
 
 
-async def token_logout_services(conn: Connection, redis_client, user_index: int):
+async def token_logout_services(conn: Connection, user_index: int):
 
-    await redis_client.delete(f"refresh:user:{user_index}")
-
-    KST = timezone(timedelta(hours=9))
-    current_time = datetime.now(KST)
+    current_time = _now_kst()
     
     await insert_user_log(
         conn = conn,

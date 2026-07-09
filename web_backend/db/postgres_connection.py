@@ -1,9 +1,7 @@
 import asyncpg
-import logging
-from asyncpg import Connection, Pool
-from fastapi import FastAPI, Depends, Request, status, HTTPException
-from contextlib import asynccontextmanager
-from web_backend.core.config import settings
+from fastapi import Request, status, HTTPException
+
+from web_backend.core.config import db_settings
 
 # create_db_pool로 DB 접속 정보를 따로 안빼면 각 api마다 접속 정보를 하드코딩 해야한다.
 # 파일이 다르면 connection pool 정보를 불러올 수 없으니까 이를 app.state에 두고 각 라우터에서 request 객체를 통해 불러온다
@@ -13,13 +11,13 @@ from web_backend.core.config import settings
 
 async def create_db_pool():
     return await asyncpg.create_pool(
-        user = settings.DB_USER,
-        password = settings.DB_PASSWORD,
-        database = settings.DB_NAME,
-        host = settings.DB_HOST,
-        port = settings.DB_PORT,
-        max_size = settings.DB_MAX_SIZE,
-        min_size = settings.DB_MIN_SIZE
+        user = db_settings.DB_USER,
+        password = db_settings.DB_PASSWORD,
+        database = db_settings.DB_NAME,
+        host = db_settings.DB_HOST,
+        port = db_settings.DB_PORT,
+        max_size = db_settings.DB_MAX_SIZE,
+        min_size = db_settings.DB_MIN_SIZE
     )
 
 # app 객체가 정의되지 않은 파일에서 FastAPI 인스턴스에 접근하기 위해 request 사용
@@ -27,7 +25,7 @@ async def create_db_pool():
 # get_db를 쓴 덕분에 객체를 생성안하고 connection pool에 대한 정보를 받아올 수 있었다.
 # 각 API 함수가 connection pool이 필요하면 선언 & Depends 의존성 주입 (get_db를 가져오고 끝나면 반납 - connection pool 사이즈는 한정적)
 
-async def get_db(request : Request):
+async def get_db(request: Request):
 
     if request.app.state.db_pool is None:
         raise HTTPException(

@@ -1,7 +1,7 @@
 import asyncio
 import asyncpg
-from core.config import db_settings
-from db.tables import CREATE_TABLES_SQL
+from web_backend.core.config import db_settings
+from web_backend.db.tables import CREATE_TABLES_SQL
 
 async def initialize_database():
     
