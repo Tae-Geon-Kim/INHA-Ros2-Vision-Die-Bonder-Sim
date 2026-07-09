@@ -15,7 +15,7 @@ JOINT_TOPICS = {
 JOINT_LIMITS = {
     "x": (-0.4, 0.4),
     "y": (-0.4, 0.4),
-    "z": (-0.115, 0.1),
+    "z": (-0.115, 0.115),
 }
 
 RANGE_DEMO_RATIO = 0.75
@@ -27,6 +27,9 @@ CHIP_JOINT_Y_AT_CENTER = 0.0
 TOOL_FRAME_Z_AT_ZERO = 0.215
 TOOL_REFERENCE_Z_OFFSET = -0.0505
 TOOL_REFERENCE_Z_AT_ZERO = TOOL_FRAME_Z_AT_ZERO + TOOL_REFERENCE_Z_OFFSET
+GRIPPER_ABS_X_AT_ZERO = 0.140
+GRIPPER_ABS_Y_AT_ZERO = 0.0
+GRIPPER_ABS_Z_AT_ZERO = 0.050
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,25 @@ def chip_to_joint_pose(x: float, y: float, z: float, theta: float = 0.0) -> Join
         x=CHIP_JOINT_X_AT_CENTER + x,
         y=CHIP_JOINT_Y_AT_CENTER - y,
         z=joint_z,
+        theta=theta,
+    )
+
+
+def gripper_abs_to_joint_pose(
+    x: float,
+    y: float,
+    z: float,
+    theta: float = 0.0,
+) -> JointPose:
+    """Convert absolute gripper contact coordinates to joint commands.
+
+    At joint (0, 0, 0), the picker contact point is treated as
+    (140 mm, 0 mm, 50 mm) in the robot absolute coordinate frame.
+    """
+    return JointPose(
+        x=x - GRIPPER_ABS_X_AT_ZERO,
+        y=GRIPPER_ABS_Y_AT_ZERO - y,
+        z=z - GRIPPER_ABS_Z_AT_ZERO,
         theta=theta,
     )
 

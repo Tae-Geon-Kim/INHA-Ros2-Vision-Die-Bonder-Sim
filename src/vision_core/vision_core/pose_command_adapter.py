@@ -18,6 +18,7 @@ from vision_core.motion_profile import (
     PRESETS,
     JointPose,
     chip_to_joint_pose,
+    gripper_abs_to_joint_pose,
     linear_profile,
     validate_pose,
 )
@@ -133,6 +134,8 @@ class PoseCommandAdapter(Node):
 
         if self.coordinate_frame == "chip":
             return chip_to_joint_pose(x, y, z, theta)
+        if self.coordinate_frame in ("gripper_abs", "gripper", "absolute"):
+            return gripper_abs_to_joint_pose(x, y, z, theta)
         if self.coordinate_frame == "joint":
             return JointPose(x, y, z, theta)
 

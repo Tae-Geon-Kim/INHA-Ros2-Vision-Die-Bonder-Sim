@@ -108,24 +108,97 @@ class MainControllerNode(Node):
         self.GRIPPER_TO_CAMERA_DY = 20.0  
         
         # 수직 방향(Z) 제어 높이
-        self.HOVER_Z = 50.0   # 이동 시 충돌 방지용 공중 높이(mm)
-        self.PRESS_Z = 15.0   # 칩 픽업 및 본딩 시 데모 접촉 높이(mm)
-        self.MIN_CONTACT_Z = float(os.environ.get("ROBOT_CONTROL_MIN_CONTACT_Z", "15.0"))
+        self.BASE_TOP_Z = float(os.environ.get("ROBOT_CONTROL_BASE_TOP_Z_MM", "50.0"))
+        self.CHIP_THICKNESS_MM = float(os.environ.get("ROBOT_CONTROL_CHIP_THICKNESS_MM", "0.1"))
+        self.SUBSTRATE_THICKNESS_MM = float(os.environ.get("ROBOT_CONTROL_SUBSTRATE_THICKNESS_MM", "5.0"))
+        self.HOVER_Z = float(os.environ.get("ROBOT_CONTROL_HOVER_Z_MM", "100.0"))
+        self.PRESS_Z = float(os.environ.get(
+            "ROBOT_CONTROL_PICK_Z_MM",
+            str(self.BASE_TOP_Z + self.CHIP_THICKNESS_MM),
+        ))
+        self.CHIP_REST_Z = float(os.environ.get("ROBOT_CONTROL_CHIP_REST_Z_MM", str(self.BASE_TOP_Z)))
+        self.SUBSTRATE_TOP_Z = float(os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_TOP_Z_MM",
+            str(self.BASE_TOP_Z + self.SUBSTRATE_THICKNESS_MM + self.CHIP_THICKNESS_MM),
+        ))
+        self.MIN_CONTACT_Z = float(os.environ.get(
+            "ROBOT_CONTROL_MIN_CONTACT_Z",
+            str(self.BASE_TOP_Z),
+        ))
         self.MOVE_SETTLE_SEC = 3.5
 
-        # Gazebo 시연용 빨간 칩 모델 제어 설정
+        # Gazebo 시연용 칩 모델 제어 설정
         self.GAZEBO_WORLD = os.environ.get("ROBOT_CONTROL_GAZEBO_WORLD", "empty")
-        self.RED_CHIP_MODEL = os.environ.get("ROBOT_CONTROL_RED_CHIP_MODEL", "red_check_chip")
-        self.CHIP_WORLD_CENTER_X_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_X_M", "0.14"))
+        self.RED_CHIP_MODEL = os.environ.get("ROBOT_CONTROL_CHIP_MODEL", "check_chip")
+        self.USE_DETACHABLE_JOINT = env_flag("ROBOT_CONTROL_USE_DETACHABLE_JOINT", True)
+        self.REQUIRE_PICKER_CONTACT = env_flag("ROBOT_CONTROL_REQUIRE_PICKER_CONTACT", True)
+        self.ATTACH_TOPIC = os.environ.get(
+            "ROBOT_CONTROL_ATTACH_TOPIC",
+            "/model/robot_system/vacuum/attach",
+        )
+        self.DETACH_TOPIC = os.environ.get(
+            "ROBOT_CONTROL_DETACH_TOPIC",
+            "/model/robot_system/vacuum/detach",
+        )
+        self.PICKER_CONTACT_TOPIC = os.environ.get(
+            "ROBOT_CONTROL_PICKER_CONTACT_TOPIC",
+            "/model/robot_system/picker/contact",
+        )
+        fallback_picker_contact_topic = (
+            f"/world/{self.GAZEBO_WORLD}/model/robot_system/link/"
+            "theta_link_1/sensor/picker_contact_sensor/contact"
+        )
+        contact_topics = os.environ.get(
+            "ROBOT_CONTROL_PICKER_CONTACT_TOPICS",
+            f"{self.PICKER_CONTACT_TOPIC},{fallback_picker_contact_topic}",
+        )
+        self.PICKER_CONTACT_TOPICS = []
+        for topic in contact_topics.split(","):
+            topic = topic.strip()
+            if topic and topic not in self.PICKER_CONTACT_TOPICS:
+                self.PICKER_CONTACT_TOPICS.append(topic)
+        self.discovered_picker_contact_topics = []
+        self.last_contact_topic_discovery = 0.0
+        self.CONTACT_TOPIC_DISCOVERY_INTERVAL_SEC = 2.0
+        self.PICKER_COLLISION_TOKEN = os.environ.get(
+            "ROBOT_CONTROL_PICKER_COLLISION_TOKEN",
+            "picker_contact_collision",
+        ).lower()
+        chip_contact_tokens = os.environ.get(
+            "ROBOT_CONTROL_CHIP_CONTACT_TOKENS",
+            f"{self.RED_CHIP_MODEL},chip_link",
+        )
+        self.CHIP_CONTACT_TOKENS = [
+            token.strip().lower()
+            for token in chip_contact_tokens.split(",")
+            if token.strip()
+        ]
+        self.PICKER_CONTACT_TIMEOUT_SEC = float(os.environ.get(
+            "ROBOT_CONTROL_PICKER_CONTACT_TIMEOUT_SEC",
+            "6.0",
+        ))
+        self.CONTACT_SEARCH_STEP_MM = float(os.environ.get(
+            "ROBOT_CONTROL_CONTACT_SEARCH_STEP_MM",
+            "1.0",
+        ))
+        self.CONTACT_SEARCH_DEPTH_MM = float(os.environ.get(
+            "ROBOT_CONTROL_CONTACT_SEARCH_DEPTH_MM",
+            "8.0",
+        ))
+        self.CHIP_WORLD_CENTER_X_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_X_M", "0.0"))
         self.CHIP_WORLD_CENTER_Y_M = float(os.environ.get("ROBOT_CONTROL_CHIP_CENTER_Y_M", "0.0"))
-        self.CHIP_SURFACE_WORLD_Z_M = float(os.environ.get("ROBOT_CONTROL_CHIP_SURFACE_WORLD_Z_M", "0.25005"))
+        self.CHIP_SURFACE_WORLD_Z_M = float(os.environ.get(
+            "ROBOT_CONTROL_CHIP_SURFACE_WORLD_Z_M",
+            str((self.BASE_TOP_Z + self.CHIP_THICKNESS_MM / 2.0) * 0.001),
+        ))
+        self.ABS_Z_ZERO_WORLD_M = float(os.environ.get("ROBOT_CONTROL_ABS_Z_ZERO_WORLD_M", "0.0"))
         self.CHIP_MIN_CARRIED_HEIGHT_M = float(os.environ.get("ROBOT_CONTROL_CHIP_MIN_CARRIED_HEIGHT_M", "0.003"))
-        self.WAIT_FOR_CHIP_SERVICE = env_flag("ROBOT_CONTROL_WAIT_FOR_CHIP_SERVICE", False)
-        self.CHIP_SERVICE_TIMEOUT_MS = int(os.environ.get("ROBOT_CONTROL_CHIP_SERVICE_TIMEOUT_MS", "300"))
+        self.WAIT_FOR_CHIP_SERVICE = env_flag("ROBOT_CONTROL_WAIT_FOR_CHIP_SERVICE", True)
+        self.CHIP_SERVICE_TIMEOUT_MS = int(os.environ.get("ROBOT_CONTROL_CHIP_SERVICE_TIMEOUT_MS", "1000"))
         self.COMMAND_LIMITS_MM = {
-            "x": (-400.0, 400.0),
+            "x": (-260.0, 540.0),
             "y": (-400.0, 400.0),
-            "z": (-0.5, 214.0),
+            "z": (40.0, 120.0),
         }
 
         # 상태 추적 변수 (로봇의 현재 x, y 좌표를 추적)
@@ -139,6 +212,217 @@ class MainControllerNode(Node):
         self.chip_y = state["chip_y"]
         self.chip_z = state["chip_z"]
         self.chip_theta_deg = state["chip_theta_deg"]
+
+    def publish_empty_ign_topic(self, topic):
+        cmd = [
+            "ign",
+            "topic",
+            "-t",
+            topic,
+            "-m",
+            "ignition.msgs.Empty",
+            "-p",
+            "unused: true",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=1.0,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            self.get_logger().warn(f'Gazebo vacuum topic publish 실패({topic}): {exc}')
+            return False
+
+        if result.returncode != 0:
+            detail = result.stderr.strip()
+            self.get_logger().warn(f'Gazebo vacuum topic publish 실패({topic}): {detail}')
+            return False
+
+        return True
+
+    def contact_output_has_picker_chip_pair(self, output):
+        normalized = output.lower()
+        if self.PICKER_COLLISION_TOKEN not in normalized:
+            return False
+        if not any(token in normalized for token in self.CHIP_CONTACT_TOKENS):
+            return False
+
+        contact_blocks = normalized.split("contact {")
+        if len(contact_blocks) <= 1:
+            return True
+
+        for block in contact_blocks[1:]:
+            if self.PICKER_COLLISION_TOKEN not in block:
+                continue
+            if any(token in block for token in self.CHIP_CONTACT_TOKENS):
+                return True
+
+        return False
+
+    def read_picker_contact_topic_once(self, topic, timeout_sec=0.25):
+        cmd = [
+            "ign",
+            "topic",
+            "-e",
+            "-t",
+            topic,
+            "-n",
+            "1",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        except (FileNotFoundError, OSError) as exc:
+            self.get_logger().warn(f'picker contact topic 읽기 실패({topic}): {exc}')
+            return False
+
+        output = f"{result.stdout}\n{result.stderr}".lower()
+        return self.contact_output_has_picker_chip_pair(output)
+
+    def refresh_picker_contact_topics(self):
+        now = time.monotonic()
+        if now - self.last_contact_topic_discovery < self.CONTACT_TOPIC_DISCOVERY_INTERVAL_SEC:
+            return
+
+        self.last_contact_topic_discovery = now
+        try:
+            result = subprocess.run(
+                ["ign", "topic", "-l"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=0.5,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return
+
+        if result.returncode != 0:
+            return
+
+        discovered = []
+        for line in result.stdout.splitlines():
+            topic = line.strip()
+            normalized = topic.lower()
+            if "contact" not in normalized:
+                continue
+            if "picker_contact_sensor" not in normalized and "picker/contact" not in normalized:
+                continue
+            if topic not in discovered:
+                discovered.append(topic)
+
+        if discovered:
+            self.discovered_picker_contact_topics = discovered
+
+    def get_picker_contact_topics(self):
+        self.refresh_picker_contact_topics()
+        topics = []
+        for topic in self.PICKER_CONTACT_TOPICS + self.discovered_picker_contact_topics:
+            if topic and topic not in topics:
+                topics.append(topic)
+        return topics or [self.PICKER_CONTACT_TOPIC]
+
+    def read_picker_contact_once(self, timeout_sec=0.25):
+        topics = self.get_picker_contact_topics()
+        per_topic_timeout = max(0.05, timeout_sec / len(topics))
+        for topic in topics:
+            if self.read_picker_contact_topic_once(topic, timeout_sec=per_topic_timeout):
+                return True
+        return False
+
+    def wait_for_picker_contact(self, timeout_sec=None):
+        if not self.REQUIRE_PICKER_CONTACT:
+            return True
+
+        wait_timeout = self.PICKER_CONTACT_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+        deadline = time.monotonic() + wait_timeout
+        topics = self.get_picker_contact_topics()
+        self.get_logger().info(
+            'picker-chip 실제 접촉 대기: '
+            f'{", ".join(topics)}'
+        )
+        while time.monotonic() < deadline:
+            remaining = max(0.05, min(0.25, deadline - time.monotonic()))
+            if self.read_picker_contact_once(timeout_sec=remaining):
+                self.get_logger().info('picker-chip contact 감지됨')
+                return True
+
+        self.get_logger().info('현재 위치에서는 picker-chip contact가 아직 감지되지 않았습니다.')
+        return False
+
+    def search_picker_contact_downward(self):
+        if not self.REQUIRE_PICKER_CONTACT:
+            return True
+
+        if self.CONTACT_SEARCH_STEP_MM <= 0.0 or self.CONTACT_SEARCH_DEPTH_MM <= 0.0:
+            return False
+
+        start_z = self.last_sent_z
+        searched = 0.0
+        lower_limit = max(self.COMMAND_LIMITS_MM["z"][0], self.MIN_CONTACT_Z)
+
+        while searched < self.CONTACT_SEARCH_DEPTH_MM:
+            next_z = max(
+                lower_limit,
+                start_z - searched - self.CONTACT_SEARCH_STEP_MM,
+            )
+            if next_z >= self.last_sent_z:
+                break
+
+            searched = start_z - next_z
+            self.get_logger().info(
+                f'contact 미감지: gripper를 {next_z:.2f}mm까지 추가 하강해 재확인합니다.'
+            )
+            if not self.publish_move(
+                self.last_sent_x,
+                self.last_sent_y,
+                next_z,
+                theta_deg=self.last_sent_theta_deg,
+            ):
+                return False
+
+            self.wait_for_motion(0.25)
+            if self.wait_for_picker_contact(timeout_sec=0.5):
+                return True
+
+            if next_z <= lower_limit:
+                break
+
+        return False
+
+    def attach_red_chip_to_picker(self):
+        if not self.USE_DETACHABLE_JOINT:
+            return False
+
+        attached = self.publish_empty_ign_topic(self.ATTACH_TOPIC)
+        if attached:
+            self.get_logger().info(
+                f'Gazebo fixed joint attach 요청: {self.ATTACH_TOPIC}'
+            )
+        return attached
+
+    def detach_red_chip_from_picker(self):
+        if not self.USE_DETACHABLE_JOINT:
+            return False
+
+        detached = self.publish_empty_ign_topic(self.DETACH_TOPIC)
+        if detached:
+            self.get_logger().info(
+                f'Gazebo fixed joint detach 요청: {self.DETACH_TOPIC}'
+            )
+        return detached
 
     def validate_command_pose(self, x, y, z):
         values = {"x": x, "y": y, "z": z}
@@ -178,7 +462,7 @@ class MainControllerNode(Node):
             f' Command Sent: X={x}, Y={y}, Z={z}, theta={target_theta}deg'
         )
 
-        if self.vacuum_attached:
+        if self.vacuum_attached and not self.USE_DETACHABLE_JOINT:
             self.move_red_chip_with_tool(x, y, z, target_theta)
         else:
             self.save_current_state()
@@ -202,6 +486,16 @@ class MainControllerNode(Node):
             self.CHIP_WORLD_CENTER_X_M + float(x_mm) * 0.001,
             self.CHIP_WORLD_CENTER_Y_M + float(y_mm) * 0.001,
         )
+
+    def absolute_to_world(self, x_mm, y_mm, z_mm):
+        return (
+            float(x_mm) * 0.001,
+            float(y_mm) * 0.001,
+            self.ABS_Z_ZERO_WORLD_M + float(z_mm) * 0.001,
+        )
+
+    def chip_bottom_to_center_z(self, bottom_z_mm):
+        return float(bottom_z_mm) + self.CHIP_THICKNESS_MM / 2.0
 
     def carried_chip_world_z(self, z_mm):
         carried_height = max(float(z_mm) * 0.001, self.CHIP_MIN_CARRIED_HEIGHT_M)
@@ -252,12 +546,12 @@ class MainControllerNode(Node):
                 check=False,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-            self.get_logger().warn(f'red_check_chip 위치 갱신 실패: {exc}')
+            self.get_logger().warn(f'{self.RED_CHIP_MODEL} 위치 갱신 실패: {exc}')
             return False
 
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
-            self.get_logger().warn(f'red_check_chip 위치 갱신 실패: {detail}')
+            self.get_logger().warn(f'{self.RED_CHIP_MODEL} 위치 갱신 실패: {detail}')
             return False
 
         self.chip_x = x_m
@@ -267,18 +561,12 @@ class MainControllerNode(Node):
         self.save_current_state()
         return True
 
-    def place_red_chip(self, x_mm, y_mm, theta_deg=0.0):
-        world_x, world_y = self.command_xy_to_world(x_mm, y_mm)
-        return self.set_red_chip_pose(
-            world_x,
-            world_y,
-            self.CHIP_SURFACE_WORLD_Z_M,
-            theta_deg=theta_deg,
+    def set_red_chip_pose_abs(self, x_mm, y_mm, z_mm, theta_deg=0.0):
+        world_x, world_y, world_z = self.absolute_to_world(
+            x_mm,
+            y_mm,
+            self.chip_bottom_to_center_z(z_mm),
         )
-
-    def move_red_chip_with_tool(self, x_mm, y_mm, z_mm, theta_deg=0.0):
-        world_x, world_y = self.command_xy_to_world(x_mm, y_mm)
-        world_z = self.carried_chip_world_z(z_mm)
         return self.set_red_chip_pose(
             world_x,
             world_y,
@@ -286,10 +574,29 @@ class MainControllerNode(Node):
             theta_deg=theta_deg,
         )
 
-    def reset_red_chip(self, x_mm=0.0, y_mm=0.0):
+    def place_red_chip(self, x_mm, y_mm, theta_deg=0.0):
+        return self.set_red_chip_pose_abs(
+            x_mm,
+            y_mm,
+            self.CHIP_REST_Z,
+            theta_deg=theta_deg,
+        )
+
+    def move_red_chip_with_tool(self, x_mm, y_mm, z_mm, theta_deg=0.0):
+        return self.set_red_chip_pose_abs(
+            x_mm,
+            y_mm,
+            float(z_mm) - self.CHIP_THICKNESS_MM,
+            theta_deg=theta_deg,
+        )
+
+    def reset_red_chip(self, x_mm=500.0, y_mm=400.0, z_mm=None):
+        chip_z = self.CHIP_REST_Z if z_mm is None else float(z_mm)
         self.vacuum_attached = VACUUM_OFF
-        self.get_logger().info(f'red_check_chip을 ({x_mm}, {y_mm})mm 위치 표면에 배치합니다.')
-        self.place_red_chip(x_mm, y_mm, theta_deg=0.0)
+        self.get_logger().info(
+            f'{self.RED_CHIP_MODEL}을 절대좌표 ({x_mm}, {y_mm}, {chip_z})mm에 배치합니다.'
+        )
+        self.set_red_chip_pose_abs(x_mm, y_mm, chip_z, theta_deg=0.0)
         self.save_current_state()
 
     # 거시 카메라를 칩 중앙에 정렬
@@ -413,62 +720,98 @@ class MainControllerNode(Node):
         return requested_height
 
     def vacuum_on(self):
+        self.get_logger().info('vacuum_on: picker-chip 접촉 확인 후 고정합니다.')
+        if not self.wait_for_picker_contact() and not self.search_picker_contact_downward():
+            self.get_logger().warn(
+                'picker-chip contact 최종 미감지: vacuum attach를 수행하지 않습니다.'
+            )
+            self.vacuum_attached = VACUUM_OFF
+            self.save_current_state()
+            return False
+
         self.vacuum_attached = VACUUM_ON
-        self.get_logger().info('vacuum_on: red_check_chip을 그리퍼에 흡착한 상태로 전환합니다.')
-        self.move_red_chip_with_tool(
-            self.last_sent_x,
-            self.last_sent_y,
-            self.last_sent_z,
-            self.last_sent_theta_deg,
-        )
+        if self.USE_DETACHABLE_JOINT:
+            if not self.attach_red_chip_to_picker():
+                self.vacuum_attached = VACUUM_OFF
+                self.save_current_state()
+                return False
+        else:
+            self.move_red_chip_with_tool(
+                self.last_sent_x,
+                self.last_sent_y,
+                self.last_sent_z,
+                self.last_sent_theta_deg,
+            )
         self.save_current_state()
+        return True
 
     def vacuum_off(self):
+        if not self.vacuum_attached:
+            self.get_logger().warn('vacuum_off: 현재 흡착 상태가 아니므로 chip 위치를 변경하지 않습니다.')
+            self.save_current_state()
+            return False
+
         self.vacuum_attached = VACUUM_OFF
-        self.get_logger().info('vacuum_off: red_check_chip을 현재 XY 위치 표면에 내려놓습니다.')
-        self.place_red_chip(
-            self.last_sent_x,
-            self.last_sent_y,
-            theta_deg=self.last_sent_theta_deg,
-        )
+        self.get_logger().info(f'vacuum_off: picker와 {self.RED_CHIP_MODEL} 고정을 해제합니다.')
+        if self.USE_DETACHABLE_JOINT:
+            self.detach_red_chip_from_picker()
+        else:
+            self.set_red_chip_pose_abs(
+                self.last_sent_x,
+                self.last_sent_y,
+                self.last_sent_z - self.CHIP_THICKNESS_MM,
+                theta_deg=self.last_sent_theta_deg,
+            )
         self.save_current_state()
+        return True
 
     def run_pick_place_demo(
         self,
-        pick_x=0.0,
-        pick_y=0.0,
-        place_x=200.0,
+        pick_x=500.0,
+        pick_y=400.0,
+        pick_z=None,
+        chip_z=None,
+        place_x=0.0,
         place_y=0.0,
+        place_z=None,
         safe_z=None,
         contact_z=None,
         settle_sec=None,
     ):
 
         """
-        칩 기준 좌표계에서 pick -> lift -> place -> release 흐름을 실행함.
-        단위는 mm이며, 실제 흡착/릴리즈는 아직 로그로만 표현함.
+        그리퍼 접촉점 절대좌표 기준 pick -> lift -> place -> release 흐름을 실행함.
+        기본값은 절대좌표 (500, 400)mm 작업면 위 칩을 substrate 위로 옮깁니다.
         """
 
         safe_height = self.HOVER_Z if safe_z is None else safe_z
-        contact_height = self.resolve_contact_height(contact_z)
+        pick_height = self.PRESS_Z if pick_z is None else float(pick_z)
+        if contact_z is not None:
+            pick_height = float(contact_z)
+        chip_height = self.CHIP_REST_Z if chip_z is None else float(chip_z)
+        place_height = self.SUBSTRATE_TOP_Z if place_z is None else float(place_z)
 
         self.get_logger().info(
-            f'pick_place_demo 시작: pick=({pick_x}, {pick_y})mm, '
-            f'place=({place_x}, {place_y})mm, safe_z={safe_height}mm, '
-            f'contact_z={contact_height}mm'
+            f'pick_place_demo 시작(gripper_abs): '
+            f'pick=({pick_x}, {pick_y}, {pick_height})mm, '
+            f'chip_bottom_z={chip_height}mm, '
+            f'place=({place_x}, {place_y}, {place_height})mm, '
+            f'safe_z={safe_height}mm'
         )
-        self.reset_red_chip(pick_x, pick_y)
+        self.reset_red_chip(pick_x, pick_y, chip_height)
 
         self.get_logger().info('1/8 pick 위치 상공으로 이동')
         self.publish_move(pick_x, pick_y, safe_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('2/8 pick 접촉 높이로 하강')
-        self.publish_move(pick_x, pick_y, contact_height, theta_deg=0.0)
+        self.publish_move(pick_x, pick_y, pick_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('3/8 칩 흡착')
-        self.vacuum_on()
+        if not self.vacuum_on():
+            self.get_logger().warn('pick 접촉/흡착 실패: chip을 움직이지 않고 pick_place_demo를 중단합니다.')
+            return False
         time.sleep(0.5)
 
         self.get_logger().info('4/8 pick 위치에서 상승')
@@ -480,7 +823,7 @@ class MainControllerNode(Node):
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('6/8 place 접촉 높이로 하강')
-        self.publish_move(place_x, place_y, contact_height, theta_deg=0.0)
+        self.publish_move(place_x, place_y, place_height, theta_deg=0.0)
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('7/8 칩 릴리즈')
@@ -492,6 +835,7 @@ class MainControllerNode(Node):
         self.wait_for_motion(settle_sec)
 
         self.get_logger().info('pick_place_demo 완료')
+        return True
 
     def run_three_chip_demo(
         self,
@@ -566,8 +910,8 @@ class MainControllerNode(Node):
             (0.0, 60.0, 50.0, 0.0, 'Y +60mm'),
             (0.0, -60.0, 50.0, 0.0, 'Y -60mm'),
             (0.0, 0.0, 50.0, 0.0, 'Y 복귀'),
-            (0.0, 0.0, 80.0, 0.0, 'Z 80mm'),
-            (0.0, 0.0, 15.0, 0.0, 'Z 15mm'),
+            (0.0, 0.0, 100.0, 0.0, 'Z 상단 100mm'),
+            (0.0, 0.0, 50.0, 0.0, 'Z 작업면 50mm'),
             (0.0, 0.0, 50.0, 0.0, 'Z 복귀'),
             (0.0, 0.0, 50.0, 90.0, 'theta +90deg'),
             (0.0, 0.0, 50.0, -90.0, 'theta -90deg'),
@@ -592,13 +936,13 @@ class MainControllerNode(Node):
         demo_steps = (
             (0.0, 0.0, 50.0, 0.0, '기준 위치'),
             (300.0, 0.0, 50.0, 0.0, 'X +300mm'),
-            (-300.0, 0.0, 50.0, 0.0, 'X -300mm'),
+            (-200.0, 0.0, 50.0, 0.0, 'X -200mm'),
             (0.0, 0.0, 50.0, 0.0, 'X 복귀'),
             (0.0, 300.0, 50.0, 0.0, 'Y +300mm'),
             (0.0, -300.0, 50.0, 0.0, 'Y -300mm'),
             (0.0, 0.0, 50.0, 0.0, 'Y 복귀'),
-            (0.0, 0.0, 190.0, 0.0, 'Z 상단 약 75%'),
-            (0.0, 0.0, 28.0, 0.0, 'Z 하단 약 75%'),
+            (0.0, 0.0, 100.0, 0.0, 'Z 상단'),
+            (0.0, 0.0, 45.0, 0.0, 'Z 하단 약 75%'),
             (0.0, 0.0, 50.0, 0.0, 'Z 복귀'),
             (0.0, 0.0, 50.0, 135.0, 'theta +135deg'),
             (0.0, 0.0, 50.0, -135.0, 'theta -135deg'),
@@ -666,8 +1010,9 @@ def build_parser():
     transfer_parser.add_argument('y', type=float)
 
     chip_reset_parser = subparsers.add_parser('chip_reset')
-    chip_reset_parser.add_argument('x', type=float, nargs='?', default=0.0)
-    chip_reset_parser.add_argument('y', type=float, nargs='?', default=0.0)
+    chip_reset_parser.add_argument('x', type=float, nargs='?', default=500.0)
+    chip_reset_parser.add_argument('y', type=float, nargs='?', default=400.0)
+    chip_reset_parser.add_argument('z', type=float, nargs='?', default=None)
 
     subparsers.add_parser('press')
     subparsers.add_parser('lift')
@@ -685,17 +1030,20 @@ def build_parser():
     range_demo_parser.add_argument('--settle-sec', type=float, default=None)
 
     pick_place_parser = subparsers.add_parser('pick_place_demo')
-    pick_place_parser.add_argument('--pick-x', type=float, default=0.0)
-    pick_place_parser.add_argument('--pick-y', type=float, default=0.0)
-    pick_place_parser.add_argument('--place-x', type=float, default=200.0)
+    pick_place_parser.add_argument('--pick-x', type=float, default=500.0)
+    pick_place_parser.add_argument('--pick-y', type=float, default=400.0)
+    pick_place_parser.add_argument('--pick-z', type=float, default=50.1)
+    pick_place_parser.add_argument('--chip-z', type=float, default=None)
+    pick_place_parser.add_argument('--place-x', type=float, default=0.0)
     pick_place_parser.add_argument('--place-y', type=float, default=0.0)
-    pick_place_parser.add_argument('--safe-z', type=float, default=50.0)
-    pick_place_parser.add_argument('--contact-z', type=float, default=15.0)
+    pick_place_parser.add_argument('--place-z', type=float, default=55.1)
+    pick_place_parser.add_argument('--safe-z', type=float, default=100.0)
+    pick_place_parser.add_argument('--contact-z', type=float, default=None)
     pick_place_parser.add_argument('--settle-sec', type=float, default=None)
 
     three_chip_parser = subparsers.add_parser('three_chip_demo')
-    three_chip_parser.add_argument('--safe-z', type=float, default=50.0)
-    three_chip_parser.add_argument('--contact-z', type=float, default=15.0)
+    three_chip_parser.add_argument('--safe-z', type=float, default=100.0)
+    three_chip_parser.add_argument('--contact-z', type=float, default=50.1)
     three_chip_parser.add_argument('--settle-sec', type=float, default=None)
 
     subparsers.add_parser('demo')
@@ -726,7 +1074,7 @@ def run_command(node, args):
     elif args.command == 'transfer':
         node.transfer_position(args.x, args.y)
     elif args.command == 'chip_reset':
-        node.reset_red_chip(args.x, args.y)
+        node.reset_red_chip(args.x, args.y, args.z)
     elif args.command == 'press':
         node.execute_z_press()
     elif args.command == 'lift':
@@ -736,11 +1084,11 @@ def run_command(node, args):
     elif args.command == 'vacuum_off':
         node.vacuum_off()
     elif args.command == 'z_demo':
-        node.move_z(80.0)
+        node.move_z(100.0)
         time.sleep(1.5)
-        node.move_z(15.0)
+        node.move_z(50.0)
         time.sleep(1.5)
-        node.move_z(80.0)
+        node.move_z(100.0)
     elif args.command == 'theta_demo':
         node.run_theta_demo(settle_sec=args.settle_sec)
     elif args.command == 'joint_demo':
@@ -751,8 +1099,11 @@ def run_command(node, args):
         node.run_pick_place_demo(
             pick_x=args.pick_x,
             pick_y=args.pick_y,
+            pick_z=args.pick_z,
+            chip_z=args.chip_z,
             place_x=args.place_x,
             place_y=args.place_y,
+            place_z=args.place_z,
             safe_z=args.safe_z,
             contact_z=args.contact_z,
             settle_sec=args.settle_sec,

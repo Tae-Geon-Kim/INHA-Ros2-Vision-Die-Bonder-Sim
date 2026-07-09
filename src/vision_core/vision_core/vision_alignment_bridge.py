@@ -101,7 +101,7 @@ class VisionAlignmentBridge(Node):
         self.declare_parameter("tolerance_theta_deg", 0.05)
         self.declare_parameter("initial_x_mm", 0.0)
         self.declare_parameter("initial_y_mm", 0.0)
-        self.declare_parameter("safe_z_mm", 50.0)
+        self.declare_parameter("safe_z_mm", 100.0)
         self.declare_parameter("initial_theta_deg", 0.0)
         self.declare_parameter("pixel_size_x_mm", 1.0)
         self.declare_parameter("pixel_size_y_mm", 1.0)

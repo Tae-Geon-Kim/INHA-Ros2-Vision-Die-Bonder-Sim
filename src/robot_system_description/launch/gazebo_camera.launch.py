@@ -17,7 +17,7 @@ def generate_launch_description():
     pkg_share = Path(get_package_share_directory("robot_system_description"))
     install_share = str(pkg_share.parent)
     robot_urdf = str(pkg_share / "urdf" / "robot_system_compiled.urdf")
-    red_chip_sdf = str(pkg_share / "models" / "red_check_chip" / "model.sdf")
+    check_chip_sdf = str(pkg_share / "models" / "red_check_chip" / "model.sdf")
     world_sdf = str(pkg_share / "worlds" / "empty_with_sensors.sdf")
 
     gazebo = ExecuteProcess(
@@ -31,7 +31,7 @@ def generate_launch_description():
     )
 
     spawn_robot = TimerAction(
-        period=5.0,
+        period=4.0,
         actions=[
             ExecuteProcess(
                 cmd=[
@@ -44,15 +44,15 @@ def generate_launch_description():
                     "-name",
                     "robot_system",
                     "-z",
-                    "0.2",
+                    "0.0",
                 ],
                 output="screen",
             ),
         ],
     )
 
-    spawn_red_chip = TimerAction(
-        period=6.0,
+    spawn_check_chip = TimerAction(
+        period=7.0,
         actions=[
             ExecuteProcess(
                 cmd=[
@@ -61,15 +61,15 @@ def generate_launch_description():
                     "ros_gz_sim",
                     "create",
                     "-file",
-                    red_chip_sdf,
+                    check_chip_sdf,
                     "-name",
-                    "red_check_chip",
+                    "check_chip",
                     "-x",
-                    "0.14",
+                    "0.5",
                     "-y",
-                    "0.0",
+                    "0.4",
                     "-z",
-                    "0.2501",
+                    "0.05005",
                 ],
                 output="screen",
             ),
@@ -88,5 +88,5 @@ def generate_launch_description():
         ),
         gazebo,
         spawn_robot,
-        spawn_red_chip,
+        spawn_check_chip,
     ])
