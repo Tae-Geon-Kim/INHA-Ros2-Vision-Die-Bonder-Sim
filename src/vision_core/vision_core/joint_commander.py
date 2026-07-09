@@ -14,6 +14,7 @@ from vision_core.motion_profile import (
     DEMO_SEQUENCE,
     JOINT_TOPICS,
     PRESETS,
+    RANGE_DEMO_SEQUENCE,
     JointPose,
     chip_to_joint_pose,
     linear_profile,
@@ -131,6 +132,14 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--period", type=float, default=0.02)
     demo_parser.add_argument("--dwell", type=float, default=1.0)
 
+    range_demo_parser = subparsers.add_parser(
+        "range_demo",
+        help="Move X/Y/Z/theta through about 75 percent of their safe demo range.",
+    )
+    range_demo_parser.add_argument("--steps", type=int, default=160)
+    range_demo_parser.add_argument("--period", type=float, default=0.02)
+    range_demo_parser.add_argument("--dwell", type=float, default=1.0)
+
     return parser
 
 
@@ -162,6 +171,13 @@ def main(argv=None) -> int:
         elif args.command == "demo":
             commander.run_sequence(
                 poses_from_names(DEMO_SEQUENCE),
+                args.steps,
+                args.period,
+                args.dwell,
+            )
+        elif args.command == "range_demo":
+            commander.run_sequence(
+                poses_from_names(RANGE_DEMO_SEQUENCE),
                 args.steps,
                 args.period,
                 args.dwell,

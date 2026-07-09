@@ -7,19 +7,26 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 
-# meshes와 urdf 폴더를 ROS 2가 인식할 수 있게 설치(Install)합니다.
+# meshes, urdf, materials, launch, worlds 폴더를 ROS 2가 인식할 수 있게 설치합니다.
 install(DIRECTORY
   meshes
   urdf
   materials
   launch
+  worlds
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(PROGRAMS
-  launch/die_bonder_commander.py
-  launch/send_target_pose.py
-  DESTINATION lib/${PROJECT_NAME}
+foreach(script_name
+  die_bonder_commander.py
+  send_target_pose.py
 )
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch/${script_name}")
+    install(PROGRAMS
+      "launch/${script_name}"
+      DESTINATION lib/${PROJECT_NAME}
+    )
+  endif()
+endforeach()
 
 ament_package()
