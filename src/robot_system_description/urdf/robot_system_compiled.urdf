@@ -31,6 +31,12 @@
         <mesh filename="package://robot_system_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
+    <collision name="base_work_surface_collision">
+      <origin rpy="0 0 0" xyz="0 0 0.0495"/>
+      <geometry>
+        <box size="1.2 1.2 0.001"/>
+      </geometry>
+    </collision>
   </link>
   <link name="y_link_1">
     <inertial>
@@ -92,7 +98,7 @@
       </geometry>
     </collision>
     <collision name="picker_contact_collision">
-      <origin rpy="0 0 0" xyz="0 0 -0.1645"/>
+      <origin rpy="0 0 0" xyz="0 0 -0.0595"/>
       <geometry>
         <box size="0.012 0.012 0.001"/>
       </geometry>
@@ -151,9 +157,9 @@
   </joint>
   <gazebo reference="theta_link_1">
     <sensor name="picker_contact_sensor" type="contact">
+      <topic>/model/robot_system/picker/contact</topic>
       <contact>
-        <collision>picker_contact_collision</collision>
-        <topic>/model/robot_system/picker/contact</topic>
+        <collision>theta_link_1_fixed_joint_lump__picker_contact_collision_collision_1</collision>
       </contact>
       <always_on>1</always_on>
       <update_rate>100</update_rate>
@@ -296,6 +302,14 @@
       <detach_topic>/model/robot_system/vacuum/detach</detach_topic>
       <output_topic>/model/robot_system/vacuum/state</output_topic>
     </plugin>
+    <plugin filename="ignition-gazebo-detachable-joint-system" name="ignition::gazebo::systems::DetachableJoint">
+      <parent_link>substrate_link</parent_link>
+      <child_model>check_chip</child_model>
+      <child_link>chip_link</child_link>
+      <attach_topic>/model/robot_system/substrate_bond/attach</attach_topic>
+      <detach_topic>/model/robot_system/substrate_bond/detach</detach_topic>
+      <output_topic>/model/robot_system/substrate_bond/state</output_topic>
+    </plugin>
   </gazebo>
   <gazebo>
     <plugin filename="libignition-gazebo-joint-position-controller-system.so" name="ignition::gazebo::systems::JointPositionController">
@@ -331,6 +345,14 @@
     <origin rpy="0 0 0" xyz="0 0 0.0525"/>
   </joint>
   <gazebo reference="substrate_link">
+    <sensor name="substrate_contact_sensor" type="contact">
+      <topic>/model/robot_system/substrate/contact</topic>
+      <contact>
+        <collision>substrate_link_collision</collision>
+      </contact>
+      <always_on>1</always_on>
+      <update_rate>100</update_rate>
+    </sensor>
     <visual>
       <material>
         <ambient>1 1 1 1</ambient>
