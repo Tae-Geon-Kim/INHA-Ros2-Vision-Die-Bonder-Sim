@@ -14,6 +14,7 @@ install(DIRECTORY
   materials
   launch
   worlds
+  models
   DESTINATION share/${PROJECT_NAME}
 )
 
