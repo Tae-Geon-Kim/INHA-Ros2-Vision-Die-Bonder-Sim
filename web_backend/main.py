@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from web_backend.api.robot_log_api import router as robot_log_router
+from web_backend.api.robot_control_api import router as robot_control_router
 from web_backend.api.user_api import router as user_router
 from web_backend.core.config import frontend_settings
 from web_backend.db.postgres_connection import create_db_pool
@@ -36,6 +37,7 @@ app.add_middleware(
 
 app.include_router(user_router, prefix="/users", tags=["Users"])
 app.include_router(robot_log_router, prefix="/robot-logs", tags=["Robot Logs"])
+app.include_router(robot_control_router, prefix="/robot-control", tags=["Robot Control"])
 
 
 @app.get("/health", tags=["Health"])
