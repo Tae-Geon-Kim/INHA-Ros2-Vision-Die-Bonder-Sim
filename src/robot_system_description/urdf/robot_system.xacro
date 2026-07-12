@@ -125,7 +125,7 @@
   <parent link="x_link_1"/>
   <child link="y_link_1"/>
   <axis xyz="0.0 -1.0 0.0"/>
-  <limit upper="0.4" lower="-0.4" effort="8" velocity="0.2"/>
+  <limit upper="0.405" lower="-0.405" effort="8" velocity="0.2"/>
   <dynamics damping="3.0" friction="0.0"/>
 </joint>
 
@@ -168,13 +168,13 @@
       <collision>theta_link_1_fixed_joint_lump__picker_contact_collision_collision</collision>
     </contact>
     <always_on>1</always_on>
-    <update_rate>100</update_rate>
+    <update_rate>50</update_rate>
   </sensor>
 </gazebo>
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="macro_camera">
-    <update_rate>5.0</update_rate>
+    <update_rate>2.0</update_rate>
     <topic>vision/macro_camera/image_raw</topic>
     <camera>
       <horizontal_fov>1.047</horizontal_fov>
@@ -187,7 +187,7 @@
         <far>100</far>
       </clip>
     </camera>
-    <always_on>1</always_on>
+    <always_on>0</always_on>
     <visualize>false</visualize>
     <pose>0.0125 0 -0.038 0 1.5708 1.5708</pose> 
   </sensor>
@@ -195,7 +195,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_1">
-    <update_rate>5.0</update_rate>
+    <update_rate>2.0</update_rate>
     <topic>vision/micro_camera_1/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -208,7 +208,7 @@
         <far>100</far>
       </clip>
     </camera>
-    <always_on>1</always_on>
+    <always_on>0</always_on>
     <visualize>false</visualize>
     <pose> 0.006  0.006 -0.0435 0 1.5708 1.5708</pose> 
   </sensor>
@@ -216,7 +216,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_2">
-    <update_rate>5.0</update_rate>
+    <update_rate>2.0</update_rate>
     <topic>vision/micro_camera_2/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -229,7 +229,7 @@
         <far>100</far>
       </clip>
     </camera>
-    <always_on>1</always_on>
+    <always_on>0</always_on>
     <visualize>false</visualize>
     <pose> -0.006  0.006 -0.0435 0 1.5708 1.5708</pose>
   </sensor>
@@ -237,7 +237,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_3">
-    <update_rate>5.0</update_rate>
+    <update_rate>2.0</update_rate>
     <topic>vision/micro_camera_3/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -250,7 +250,7 @@
         <far>100</far>
       </clip>
     </camera>
-    <always_on>1</always_on>
+    <always_on>0</always_on>
     <visualize>false</visualize>
     <pose> -0.006  -0.006 -0.0435 0 1.5708 1.5708</pose> 
   </sensor>
@@ -258,7 +258,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_4">
-    <update_rate>5.0</update_rate>
+    <update_rate>2.0</update_rate>
     <topic>vision/micro_camera_4/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -271,7 +271,7 @@
         <far>100</far>
       </clip>
     </camera>
-    <always_on>1</always_on>
+    <always_on>0</always_on>
     <visualize>false</visualize>
     <pose> 0.006  -0.006 -0.0435 0 1.5708 1.5708</pose> 
   </sensor>

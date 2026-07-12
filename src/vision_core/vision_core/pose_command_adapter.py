@@ -39,9 +39,22 @@ CONTACT_PAIR_REARM_SEC = 5.0
 PICK_CONTACT_TARGET_Z_MAX = -0.112
 PICKER_CONTACT_TOKENS = ("picker_contact_collision",)
 SUBSTRATE_CONTACT_TOKENS = ("substrate_link_collision", "substrate_link")
-CHIP_CONTACT_TOKENS = ("check_chip", "chip_link")
-PRIMARY_CHIP_CONTACT_TOKENS = ("check_chip::", "/model/check_chip/")
-SECOND_CHIP_CONTACT_TOKENS = ("check_chip_2::", "/model/check_chip_2/")
+MAX_STACK_CHIP_COUNT = 16
+CHIP_MODEL_NAMES = tuple(
+    "check_chip" if chip_index == 1 else f"check_chip_{chip_index}"
+    for chip_index in range(1, MAX_STACK_CHIP_COUNT + 1)
+)
+
+
+def collision_chip_model(collision_name: str) -> str | None:
+    normalized = str(collision_name).lower()
+    for model_name in reversed(CHIP_MODEL_NAMES):
+        if (
+            f"{model_name}::" in normalized
+            or f"/model/{model_name}/" in normalized
+        ):
+            return model_name
+    return None
 
 
 def format_joint_pose_si(pose: JointPose) -> str:
@@ -101,6 +114,7 @@ class PoseCommandAdapter(Node):
         self.declare_parameter("settle_samples", 5)
         self.declare_parameter("restore_state", False)
         self.declare_parameter("idle_hold_period", 0.05)
+        self.declare_parameter("stack_count", 4)
 
         self.scale = unit_scale(self.get_parameter("input_unit").value)
         self.coordinate_frame = self.get_parameter("coordinate_frame").value
@@ -124,6 +138,12 @@ class PoseCommandAdapter(Node):
         self.idle_hold_period = float(
             self.get_parameter("idle_hold_period").value
         )
+        self.stack_count = int(self.get_parameter("stack_count").value)
+        if self.stack_count < 1 or self.stack_count > MAX_STACK_CHIP_COUNT:
+            raise ValueError(
+                f"stack_count must be between 1 and {MAX_STACK_CHIP_COUNT}: "
+                f"{self.stack_count}"
+            )
 
         self.publishers_by_axis = {
             axis: self.create_publisher(Float64, topic, 10)
@@ -141,6 +161,8 @@ class PoseCommandAdapter(Node):
         self.picker_contact_generation = 0
         self.substrate_contact_generation = 0
         self.placement_contact_last_seen = {}
+        self.contact_motion_mode = "idle"
+        self.active_picked_chip_model = None
         self.motion_stopped_by_contact = False
         self.command_group = MutuallyExclusiveCallbackGroup()
         self.feedback_group = ReentrantCallbackGroup()
@@ -172,21 +194,16 @@ class PoseCommandAdapter(Node):
             self.hold_current_target,
             callback_group=self.command_group,
         )
-        self.create_subscription(
-            Contacts,
-            "/world/empty/model/check_chip/link/chip_link/"
-            "sensor/chip_contact_sensor/contact",
-            self.handle_substrate_contacts,
-            qos_profile_sensor_data,
-            callback_group=self.feedback_group,
-        )
-        self.create_subscription(
-            Contacts,
-            "/world/empty/model/check_chip_2/link/chip_link/"
-            "sensor/chip_contact_sensor/contact",
-            self.handle_substrate_contacts,
-            qos_profile_sensor_data,
-            callback_group=self.feedback_group,
+        self.chip_contact_subscriptions = tuple(
+            self.create_subscription(
+                Contacts,
+                f"/world/empty/model/{model_name}/link/chip_link/"
+                "sensor/chip_contact_sensor/contact",
+                self.handle_substrate_contacts,
+                qos_profile_sensor_data,
+                callback_group=self.feedback_group,
+            )
+            for model_name in CHIP_MODEL_NAMES[:self.stack_count]
         )
 
         self.get_logger().info(
@@ -261,44 +278,69 @@ class PoseCommandAdapter(Node):
         for contact in msg.contacts:
             first_name = contact.collision1.name.lower()
             second_name = contact.collision2.name.lower()
-            picker_chip_match = (
+            first_chip_model = collision_chip_model(first_name)
+            second_chip_model = collision_chip_model(second_name)
+            picker_chip_model = None
+            if (
                 any(token in first_name for token in PICKER_CONTACT_TOKENS)
-                and any(token in second_name for token in CHIP_CONTACT_TOKENS)
-            ) or (
+                and second_chip_model is not None
+            ):
+                picker_chip_model = second_chip_model
+            elif (
                 any(token in second_name for token in PICKER_CONTACT_TOKENS)
-                and any(token in first_name for token in CHIP_CONTACT_TOKENS)
-            )
+                and first_chip_model is not None
+            ):
+                picker_chip_model = first_chip_model
             direct_match = (
                 any(token in first_name for token in SUBSTRATE_CONTACT_TOKENS)
-                and any(token in second_name for token in CHIP_CONTACT_TOKENS)
+                and second_chip_model is not None
             )
             reverse_match = (
                 any(token in second_name for token in SUBSTRATE_CONTACT_TOKENS)
-                and any(token in first_name for token in CHIP_CONTACT_TOKENS)
+                and first_chip_model is not None
             )
             chip_stack_match = (
-                any(token in first_name for token in PRIMARY_CHIP_CONTACT_TOKENS)
-                and any(token in second_name for token in SECOND_CHIP_CONTACT_TOKENS)
-            ) or (
-                any(token in second_name for token in PRIMARY_CHIP_CONTACT_TOKENS)
-                and any(token in first_name for token in SECOND_CHIP_CONTACT_TOKENS)
+                first_chip_model is not None
+                and second_chip_model is not None
+                and first_chip_model != second_chip_model
             )
-            if picker_chip_match or direct_match or reverse_match or chip_stack_match:
-                contact_pair = tuple(sorted((first_name, second_name)))
-                now = time.monotonic()
-                with self.contact_lock:
-                    last_seen = self.placement_contact_last_seen.get(
-                        contact_pair,
-                        0.0,
+            contact_pair = tuple(sorted((first_name, second_name)))
+            now = time.monotonic()
+            with self.contact_lock:
+                is_picker_contact = picker_chip_model is not None
+                if is_picker_contact:
+                    if self.contact_motion_mode != "pick":
+                        continue
+                    self.active_picked_chip_model = picker_chip_model
+                else:
+                    active_model = self.active_picked_chip_model
+                    active_placement_match = (
+                        active_model is not None
+                        and self.contact_motion_mode == "place"
+                        and (
+                            (direct_match and second_chip_model == active_model)
+                            or (reverse_match and first_chip_model == active_model)
+                            or (
+                                chip_stack_match
+                                and active_model
+                                in (first_chip_model, second_chip_model)
+                            )
+                        )
                     )
-                    self.placement_contact_last_seen[contact_pair] = now
-                    if now - last_seen <= CONTACT_PAIR_REARM_SEC:
-                        return
-                    if picker_chip_match:
-                        self.picker_contact_generation += 1
-                    else:
-                        self.substrate_contact_generation += 1
-                return
+                    if not active_placement_match:
+                        continue
+
+                last_seen = self.placement_contact_last_seen.get(
+                    contact_pair,
+                    0.0,
+                )
+                self.placement_contact_last_seen[contact_pair] = now
+                if now - last_seen <= CONTACT_PAIR_REARM_SEC:
+                    continue
+                if is_picker_contact:
+                    self.picker_contact_generation += 1
+                else:
+                    self.substrate_contact_generation += 1
 
     def get_picker_contact_generation(self) -> int:
         with self.contact_lock:
@@ -474,6 +516,11 @@ class PoseCommandAdapter(Node):
         initial_picker_contact_generation = self.get_picker_contact_generation()
         initial_placement_contact_generation = self.get_substrate_contact_generation()
         self.motion_stopped_by_contact = False
+        contact_motion_mode = "idle"
+        if descending:
+            contact_motion_mode = "pick" if monitor_picker_contact else "place"
+        with self.contact_lock:
+            self.contact_motion_mode = contact_motion_mode
 
         linear_delta = max(
             abs(target.x - self.current_pose.x),
@@ -491,27 +538,31 @@ class PoseCommandAdapter(Node):
         )
         profile_steps = min(self.steps, profile_steps)
 
-        for pose in linear_profile(self.current_pose, target, profile_steps):
-            if self.stop_descent_on_substrate_contact(
-                descending,
-                monitor_picker_contact,
-                initial_picker_contact_generation,
-                initial_placement_contact_generation,
-            ):
-                return
-            self.publish_pose(pose)
-            time.sleep(self.period)
+        try:
+            for pose in linear_profile(self.current_pose, target, profile_steps):
+                if self.stop_descent_on_substrate_contact(
+                    descending,
+                    monitor_picker_contact,
+                    initial_picker_contact_generation,
+                    initial_placement_contact_generation,
+                ):
+                    return
+                self.publish_pose(pose)
+                time.sleep(self.period)
 
-        if not self.wait_until_reached(
-            target,
-            descending=descending,
-            monitor_picker_contact=monitor_picker_contact,
-            initial_picker_contact_generation=initial_picker_contact_generation,
-            initial_placement_contact_generation=initial_placement_contact_generation,
-        ):
-            if not self.motion_stopped_by_contact:
-                self.hold_pose(target)
-            save_state(self.current_pose)
+            if not self.wait_until_reached(
+                target,
+                descending=descending,
+                monitor_picker_contact=monitor_picker_contact,
+                initial_picker_contact_generation=initial_picker_contact_generation,
+                initial_placement_contact_generation=initial_placement_contact_generation,
+            ):
+                if not self.motion_stopped_by_contact:
+                    self.hold_pose(target)
+                save_state(self.current_pose)
+        finally:
+            with self.contact_lock:
+                self.contact_motion_mode = "idle"
 
     def handle_command(self, msg: Pose) -> None:
         try:
