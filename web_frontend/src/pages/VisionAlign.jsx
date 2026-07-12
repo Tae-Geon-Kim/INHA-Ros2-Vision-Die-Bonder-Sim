@@ -1,44 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Hash, RefreshCw, Search } from "lucide-react";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, Hash, Search } from "lucide-react";
 
-import ChartCard from "../components/charts/ChartCard.jsx";
+import { AlignmentConvergenceChart } from "../components/charts/ChartCard.jsx";
 import MetricCard from "../components/cards/MetricCard.jsx";
-import PageHeader from "../components/layout/PageHeader.jsx";
+import PageHeader, { ServerStatus } from "../components/layout/PageHeader.jsx";
 import StatusBadge from "../components/logs/StatusBadge.jsx";
 import { robotLogApi } from "../api/api.js";
-import { formatNumber, formatPreciseDate, formatTimeLabel, timestampOf } from "../utils/format.js";
+import { formatNumber, formatPreciseDate } from "../utils/format.js";
 
 const STEP_OPTIONS = ["PICK", "PLACE"];
-
-function buildRows(items) {
-  return [...items]
-    .sort((a, b) => timestampOf(a.created_at) - timestampOf(b.created_at))
-    .map((item) => ({
-      time: formatTimeLabel(item.created_at),
-      dx: Number(item.offset_x || 0),
-      dy: Number(item.offset_y || 0),
-      dtheta: Number(item.offset_theta || 0),
-    }));
-}
-
-function symmetricDomain(rows) {
-  const maxAbs = rows.reduce((currentMax, row) => (
-    Math.max(currentMax, Math.abs(row.dx), Math.abs(row.dy), Math.abs(row.dtheta))
-  ), 0);
-  const padded = Math.max(maxAbs * 1.15, 1);
-  return [-padded, padded];
-}
 
 export default function VisionAlign() {
   const [items, setItems] = useState([]);
@@ -50,10 +20,18 @@ export default function VisionAlign() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [work, setWork] = useState([]);
+  const [workError, setWorkError] = useState(null);
+  const loadInFlight = useRef(false);
+  const workLoadInFlight = useRef(false);
 
-  const loadVisionAlign = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadVisionAlign = useCallback(async ({ background = false } = {}) => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const response = await robotLogApi.listVisionAlignLogs({
         limit: 100,
@@ -64,19 +42,49 @@ export default function VisionAlign() {
       });
       setItems(response?.data?.items || []);
       setTotal(response?.data?.total || 0);
+      setError(null);
     } catch (requestError) {
       setError(requestError.message || "비전 정렬 로그를 불러오지 못했습니다.");
     } finally {
-      setLoading(false);
+      loadInFlight.current = false;
+      if (!background) setLoading(false);
     }
   }, [filters]);
 
   useEffect(() => {
     loadVisionAlign();
+    const timer = window.setInterval(
+      () => loadVisionAlign({ background: true }),
+      3000,
+    );
+    return () => window.clearInterval(timer);
   }, [loadVisionAlign]);
 
-  const chartRows = useMemo(() => buildRows(items), [items]);
-  const chartDomain = useMemo(() => symmetricDomain(chartRows), [chartRows]);
+  const loadWorkHistories = useCallback(async () => {
+    if (workLoadInFlight.current) return;
+    workLoadInFlight.current = true;
+    try {
+      const response = await robotLogApi.listWorkHistories({
+        limit: 200,
+        offset: 0,
+      });
+      setWork(response?.data?.items || []);
+      setWorkError(null);
+    } catch (requestError) {
+      setWorkError(
+        requestError.message || "작업 이력을 불러오지 못했습니다.",
+      );
+    } finally {
+      workLoadInFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWorkHistories();
+    const timer = window.setInterval(loadWorkHistories, 1000);
+    return () => window.clearInterval(timer);
+  }, [loadWorkHistories]);
+
   const metrics = useMemo(() => {
     const maxError = items.reduce((currentMax, item) => Math.max(
       currentMax,
@@ -98,22 +106,12 @@ export default function VisionAlign() {
         eyebrow="Vision Logs"
         title="Vision Align"
         description="Pick/Place 공정의 카메라 보정 offset과 0 기준 수렴 상태를 확인합니다."
-        actions={
-          <button
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
-            onClick={loadVisionAlign}
-            type="button"
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </button>
-        }
+        actions={<ServerStatus />}
       />
 
-      {error ? (
+      {error || workError ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-          {error}
+          {error || workError}
         </div>
       ) : null}
 
@@ -124,23 +122,7 @@ export default function VisionAlign() {
         <MetricCard label="Max Abs" value={formatNumber(metrics.maxError, 3)} icon={Activity} tone="ember" caption="x/y/theta" />
       </section>
 
-      <ChartCard title="Alignment Error Convergence" description="x/y/theta offset이 0 기준선으로 가까워지는 흐름입니다.">
-        <div className="h-80">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartRows}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="time" tick={{ fontSize: 12 }} minTickGap={18} />
-              <YAxis domain={chartDomain} tickFormatter={(value) => formatNumber(value, 2)} width={64} />
-              <Tooltip formatter={(value, name) => [formatNumber(value, 4), name]} />
-              <Legend />
-              <ReferenceLine y={0} stroke="#202822" strokeDasharray="5 5" />
-              <Line type="monotone" dataKey="dx" name="x error" stroke="#267a4d" strokeWidth={3} dot={false} isAnimationActive={false} />
-              <Line type="monotone" dataKey="dy" name="y error" stroke="#376d86" strokeWidth={3} dot={false} isAnimationActive={false} />
-              <Line type="monotone" dataKey="dtheta" name="theta error" stroke="#a46213" strokeWidth={3} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </ChartCard>
+      <AlignmentConvergenceChart work={work} />
 
       <section className="rounded-lg border border-slate-200 bg-white shadow-panel">
         <div className="grid gap-3 border-b border-slate-200 px-5 py-4 lg:grid-cols-[150px_150px_minmax(170px,1fr)_auto]">
@@ -175,7 +157,7 @@ export default function VisionAlign() {
           </label>
           <button
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-bold text-ink disabled:opacity-60"
-            onClick={loadVisionAlign}
+            onClick={() => loadVisionAlign()}
             type="button"
             disabled={loading}
           >

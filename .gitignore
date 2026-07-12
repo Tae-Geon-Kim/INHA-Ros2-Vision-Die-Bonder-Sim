@@ -22,3 +22,6 @@ node_modules/
 dist/
 web_frontend/node_modules/
 web_frontend/dist/
+
+# 6. Automated database CSV archives
+data_archives/

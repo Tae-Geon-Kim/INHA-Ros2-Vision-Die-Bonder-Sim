@@ -5,6 +5,7 @@ from web_backend.db.postgres_connection import get_db
 from web_backend.schemas.common_schemas import CommonResponse
 from web_backend.schemas.robot_log_schemas import (
     ErrorLevel,
+    PlaceCompletionCreate,
     ProcessStep,
     RobotErrorLogCreate,
     VisionAlignLogCreate,
@@ -20,6 +21,7 @@ from web_backend.services.robot_log_services import (
     list_robot_error_logs_service,
     list_vision_align_logs_service,
     list_work_histories_service,
+    record_place_completion_service,
     update_work_history_service,
 )
 
@@ -58,6 +60,25 @@ async def patch_work_history(
     result = await update_work_history_service(conn, history_id, data)
 
     return CommonResponse(message="작업 이력이 수정되었습니다.", data=result)
+
+
+@router.post(
+    "/work-history/{history_id}/place-complete",
+    response_model=CommonResponse,
+    status_code=status.HTTP_200_OK,
+    summary="[로봇 로그] 칩 place 비전 정렬 완료 기록",
+    description="칩별 place 비전 정렬 완료 번호와 시각을 작업 이력에 기록합니다.",
+)
+async def record_place_completion(
+    history_id: int,
+    data: PlaceCompletionCreate,
+    conn: Connection = Depends(get_db),
+):
+    result = await record_place_completion_service(conn, history_id, data)
+    return CommonResponse(
+        message="칩 place 비전 정렬 완료 시각이 기록되었습니다.",
+        data=result,
+    )
 
 
 @router.get(

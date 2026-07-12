@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS work_history (
     history_id SERIAL PRIMARY KEY,
     die_serial_number VARCHAR(100) NOT NULL,
     stack_count INTEGER NOT NULL DEFAULT 4,
+    place_completion_times TIMESTAMP[] NOT NULL DEFAULT '{}',
     start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     end_time TIMESTAMP,
     status VARCHAR(20) DEFAULT 'START'
@@ -17,6 +18,10 @@ CREATE TABLE IF NOT EXISTS work_history (
 
 ALTER TABLE work_history
     ADD COLUMN IF NOT EXISTS stack_count INTEGER NOT NULL DEFAULT 4;
+
+ALTER TABLE work_history
+    ADD COLUMN IF NOT EXISTS place_completion_times TIMESTAMP[]
+    NOT NULL DEFAULT '{}';
 
 UPDATE work_history
 SET stack_count = substring(
@@ -57,6 +62,10 @@ CREATE TABLE IF NOT EXISTS vision_align_logs (
 
 CREATE INDEX IF NOT EXISTS idx_work_history_start_time
     ON work_history(start_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_work_history_archive_cutoff
+    ON work_history ((COALESCE(end_time, start_time)))
+    WHERE status IN ('DONE', 'FAIL', 'STOP');
 
 CREATE INDEX IF NOT EXISTS idx_robot_error_logs_error_time
     ON robot_error_logs(error_time DESC);

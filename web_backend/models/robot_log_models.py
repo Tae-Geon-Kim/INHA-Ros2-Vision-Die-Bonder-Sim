@@ -16,7 +16,7 @@ async def insert_work_history(
         )
         VALUES ($1, $2, $3, $4)
         RETURNING
-            history_id, die_serial_number, stack_count,
+            history_id, die_serial_number, stack_count, place_completion_times,
             start_time, end_time, status
     """
 
@@ -42,7 +42,7 @@ async def update_work_history(
             end_time = COALESCE($3, end_time)
         WHERE history_id = $1
         RETURNING
-            history_id, die_serial_number, stack_count,
+            history_id, die_serial_number, stack_count, place_completion_times,
             start_time, end_time, status
     """
 
@@ -52,7 +52,7 @@ async def update_work_history(
 async def select_work_history(conn: Connection, history_id: int):
     sql = """
         SELECT
-            history_id, die_serial_number, stack_count,
+            history_id, die_serial_number, stack_count, place_completion_times,
             start_time, end_time, status
         FROM work_history
         WHERE history_id = $1
@@ -70,7 +70,7 @@ async def select_work_histories(
 ):
     sql = """
         SELECT
-            history_id, die_serial_number, stack_count,
+            history_id, die_serial_number, stack_count, place_completion_times,
             start_time, end_time, status
         FROM work_history
         WHERE ($1::varchar IS NULL OR status = $1)
@@ -95,6 +95,29 @@ async def count_work_histories(
     """
 
     return await conn.fetchval(sql, status, die_serial_number)
+
+
+async def append_place_completion(
+    conn: Connection,
+    history_id: int,
+    chip_index: int,
+    completed_at: datetime,
+):
+    sql = """
+        UPDATE work_history
+        SET place_completion_times = CASE
+            WHEN $2 <= stack_count
+             AND cardinality(place_completion_times) = $2 - 1
+            THEN array_append(place_completion_times, $3)
+            ELSE place_completion_times
+        END
+        WHERE history_id = $1
+        RETURNING
+            history_id, die_serial_number, stack_count, place_completion_times,
+            start_time, end_time, status
+    """
+
+    return await conn.fetchrow(sql, history_id, chip_index, completed_at)
 
 
 async def insert_robot_error_log(
@@ -225,3 +248,119 @@ async def count_vision_align_logs(
     """
 
     return await conn.fetchval(sql, history_id, process_step, camera_type)
+
+
+async def try_acquire_robot_archive_lock(
+    conn: Connection,
+    lock_key: int,
+):
+    sql = "SELECT pg_try_advisory_xact_lock($1)"
+    return bool(await conn.fetchval(sql, lock_key))
+
+
+async def select_archivable_work_histories(
+    conn: Connection,
+    cutoff: datetime,
+    limit: int,
+):
+    sql = """
+        SELECT
+            history_id, die_serial_number, stack_count, place_completion_times,
+            start_time, end_time, status
+        FROM work_history
+        WHERE status IN ('DONE', 'FAIL', 'STOP')
+          AND COALESCE(end_time, start_time) < $1
+        ORDER BY history_id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    """
+
+    return await conn.fetch(sql, cutoff, limit)
+
+
+async def select_archivable_robot_error_logs(
+    conn: Connection,
+    history_ids: list[int],
+    cutoff: datetime,
+):
+    sql = """
+        SELECT log_id, error_time, error_level, error_code, detail, history_id
+        FROM robot_error_logs
+        WHERE history_id = ANY($1::int[])
+           OR (history_id IS NULL AND error_time < $2)
+        ORDER BY log_id
+        FOR UPDATE
+    """
+
+    return await conn.fetch(sql, history_ids, cutoff)
+
+
+async def select_archivable_vision_align_logs(
+    conn: Connection,
+    history_ids: list[int],
+    cutoff: datetime,
+):
+    sql = """
+        SELECT
+            align_id, history_id, process_step, camera_type,
+            offset_x, offset_y, offset_theta, created_at
+        FROM vision_align_logs
+        WHERE history_id = ANY($1::int[])
+           OR (history_id IS NULL AND created_at < $2)
+        ORDER BY align_id
+        FOR UPDATE
+    """
+
+    return await conn.fetch(sql, history_ids, cutoff)
+
+
+async def delete_archived_robot_data(
+    conn: Connection,
+    history_ids: list[int],
+    error_log_ids: list[int],
+    align_log_ids: list[int],
+):
+    deleted = {
+        "work_history": 0,
+        "robot_error_logs": 0,
+        "vision_align_logs": 0,
+    }
+
+    if align_log_ids:
+        deleted["vision_align_logs"] = await conn.fetchval(
+            """
+            WITH deleted_rows AS (
+                DELETE FROM vision_align_logs
+                WHERE align_id = ANY($1::int[])
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted_rows
+            """,
+            align_log_ids,
+        )
+    if error_log_ids:
+        deleted["robot_error_logs"] = await conn.fetchval(
+            """
+            WITH deleted_rows AS (
+                DELETE FROM robot_error_logs
+                WHERE log_id = ANY($1::int[])
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted_rows
+            """,
+            error_log_ids,
+        )
+    if history_ids:
+        deleted["work_history"] = await conn.fetchval(
+            """
+            WITH deleted_rows AS (
+                DELETE FROM work_history
+                WHERE history_id = ANY($1::int[])
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted_rows
+            """,
+            history_ids,
+        )
+
+    return deleted

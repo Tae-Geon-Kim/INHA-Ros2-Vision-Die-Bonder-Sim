@@ -1,16 +1,22 @@
 import asyncio
+import csv
+import tempfile
 import unittest
+from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 from pydantic import ValidationError
 
 from web_backend.api import robot_control_api, robot_log_api
 from web_backend.schemas.robot_log_schemas import (
+    PlaceCompletionCreate,
     VisionAlignLogCreate,
     WorkHistoryCreate,
 )
 from web_backend.schemas.robot_control_schemas import DemoStartRequest
+from web_backend.services import robot_log_services
 
 
 class FakeProcess:
@@ -25,6 +31,30 @@ class FakeProcess:
 
     def wait(self):
         return 0 if self.returncode is None else self.returncode
+
+
+class AsyncContext:
+    def __init__(self, value=None):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class FakeArchiveConnection:
+    def transaction(self):
+        return AsyncContext()
+
+
+class FakeArchivePool:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def acquire(self):
+        return AsyncContext(self.connection)
 
 
 async def run_inline(function, *args, **kwargs):
@@ -480,6 +510,134 @@ class VisionLogApiTests(unittest.IsolatedAsyncioTestCase):
             [entry.camera_type for entry in entries],
         )
 
+    async def test_place_completion_event_is_recorded_for_work_history(self):
+        save_completion = AsyncMock(return_value={
+            "history_id": 42,
+            "place_completion_times": [datetime(2026, 7, 12, 12, 0, 0)],
+        })
+        payload = PlaceCompletionCreate(chip_index=1)
+
+        with patch.object(
+            robot_log_api,
+            "record_place_completion_service",
+            save_completion,
+        ):
+            response = await robot_log_api.record_place_completion(
+                42,
+                payload,
+                conn=object(),
+            )
+
+        save_completion.assert_awaited_once_with(ANY, 42, payload)
+        self.assertEqual(response.data["history_id"], 42)
+
+
+class RobotDataArchiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expired_rows_are_written_to_csv_before_delete(self):
+        now = datetime(2026, 7, 12, 12, 0, 0)
+        old_time = now - timedelta(days=8)
+        work_rows = [{
+            "history_id": 42,
+            "die_serial_number": "HBM-4L-ARCHIVE-TEST",
+            "stack_count": 4,
+            "place_completion_times": [old_time],
+            "start_time": old_time,
+            "end_time": old_time,
+            "status": "DONE",
+        }]
+        error_rows = [{
+            "log_id": 51,
+            "error_time": old_time,
+            "error_level": "WARN",
+            "error_code": "ARCHIVE_TEST",
+            "detail": "test detail",
+            "history_id": 42,
+        }]
+        align_rows = [{
+            "align_id": 61,
+            "history_id": 42,
+            "process_step": "PLACE",
+            "camera_type": "MACRO",
+            "offset_x": 0.001,
+            "offset_y": -0.002,
+            "offset_theta": 0.03,
+            "created_at": old_time,
+        }]
+        delete_rows = AsyncMock(return_value={
+            "work_history": 1,
+            "robot_error_logs": 1,
+            "vision_align_logs": 1,
+        })
+
+        with (
+            tempfile.TemporaryDirectory() as temporary_dir,
+            patch.object(
+                robot_log_services,
+                "try_acquire_robot_archive_lock",
+                AsyncMock(return_value=True),
+            ),
+            patch.object(
+                robot_log_services,
+                "select_archivable_work_histories",
+                AsyncMock(return_value=work_rows),
+            ),
+            patch.object(
+                robot_log_services,
+                "select_archivable_robot_error_logs",
+                AsyncMock(return_value=error_rows),
+            ),
+            patch.object(
+                robot_log_services,
+                "select_archivable_vision_align_logs",
+                AsyncMock(return_value=align_rows),
+            ),
+            patch.object(
+                robot_log_services,
+                "delete_archived_robot_data",
+                delete_rows,
+            ),
+            patch.object(
+                robot_log_services.asyncio,
+                "to_thread",
+                run_inline,
+            ),
+        ):
+            result = await robot_log_services.archive_expired_robot_data(
+                FakeArchivePool(FakeArchiveConnection()),
+                archive_root=temporary_dir,
+                now=now,
+            )
+
+            archive_path = Path(result["archive_path"])
+            self.assertTrue(archive_path.is_dir())
+            self.assertNotIn("log", archive_path.relative_to(temporary_dir).parts)
+            expected_files = {
+                "archive_summary.csv",
+                "robot_error_logs.csv",
+                "vision_align_logs.csv",
+                "work_history.csv",
+            }
+            self.assertEqual(
+                {path.name for path in archive_path.iterdir()},
+                expected_files,
+            )
+            with (archive_path / "work_history.csv").open(
+                encoding="utf-8-sig",
+                newline="",
+            ) as handle:
+                archived_work = list(csv.DictReader(handle))
+
+        self.assertEqual(result["status"], "archived")
+        self.assertEqual(archived_work[0]["history_id"], "42")
+        self.assertEqual(archived_work[0]["stack_count"], "4")
+        self.assertIn("2026-07-04 12:00:00", archived_work[0]["place_completion_times"])
+        delete_rows.assert_awaited_once_with(
+            ANY,
+            [42],
+            [51],
+            [61],
+        )
+
 
 class ProcessConfigurationTests(unittest.TestCase):
     def test_requested_count_reaches_make_arguments_and_environment(self):
@@ -503,6 +661,10 @@ class ProcessConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(environment["STACK_COUNT"], "16")
         self.assertEqual(environment["HISTORY_ID"], "42")
+        self.assertEqual(
+            environment["ROBOT_CONTROL_PLACE_COMPLETION_URL"],
+            "http://127.0.0.1:8000/robot-logs/work-history/42/place-complete",
+        )
 
     def test_requested_count_overrides_stale_make_assignment(self):
         argv = robot_control_api._command_argv(

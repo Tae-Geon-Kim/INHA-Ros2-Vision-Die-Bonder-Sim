@@ -35,9 +35,15 @@ class WorkHistoryResponse(BaseModel):
     history_id: int
     die_serial_number: str
     stack_count: int
+    place_completion_times: list[datetime] = Field(default_factory=list)
     start_time: datetime
     end_time: datetime | None = None
     status: str
+
+
+class PlaceCompletionCreate(BaseModel):
+    chip_index: int = Field(..., ge=1, le=16)
+    completed_at: datetime | None = None
 
 
 class RobotErrorLogCreate(BaseModel):
