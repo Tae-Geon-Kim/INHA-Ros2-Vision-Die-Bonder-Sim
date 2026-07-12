@@ -12,3 +12,36 @@
     font: inherit;
   }
 }
+
+@layer components {
+  .stack-range::-webkit-slider-thumb {
+    width: 1.5rem;
+    height: 1.5rem;
+    appearance: none;
+    border: 0.375rem solid #267a4d;
+    border-radius: 9999px;
+    background: #ffffff;
+    box-shadow: 0 3px 12px rgba(38, 122, 77, 0.3);
+    transition: transform 160ms ease, box-shadow 160ms ease;
+  }
+
+  .stack-range::-moz-range-thumb {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: 0.375rem solid #267a4d;
+    border-radius: 9999px;
+    background: #ffffff;
+    box-shadow: 0 3px 12px rgba(38, 122, 77, 0.3);
+    transition: transform 160ms ease, box-shadow 160ms ease;
+  }
+
+  .stack-range:focus-visible {
+    outline: 3px solid rgba(38, 122, 77, 0.24);
+    outline-offset: 0.5rem;
+  }
+
+  .stack-range:not(:disabled)::-webkit-slider-thumb:hover {
+    transform: scale(1.08);
+    box-shadow: 0 4px 16px rgba(38, 122, 77, 0.4);
+  }
+}

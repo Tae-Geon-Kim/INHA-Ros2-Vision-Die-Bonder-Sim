@@ -5,7 +5,7 @@
 
 ## 1. 개요
 
-이 백엔드는 ROS 2 Vision Die-Bonder Simulator의 웹 대시보드를 위한 FastAPI 서버이다. 주요 기능은 사용자 인증, 로봇 작업 이력/로그 저장 및 조회, Gazebo Pick/Place 데모 프로세스 제어이다.
+이 백엔드는 ROS 2 Vision Die-Bonder Simulator의 웹 대시보드를 위한 FastAPI 서버이다. 주요 기능은 사용자 인증, 로봇 작업 이력/로그 저장 및 조회, 4~16개 비전 적층 데모 프로세스 제어이다.
 
 - 기본 실행 URL: `http://127.0.0.1:8000`
 - Swagger UI: `GET /docs`
@@ -95,9 +95,9 @@ Retry-After: 12
 | `GET` | `/robot-logs/errors` | 없음 | 로봇 에러 로그 목록 조회 |
 | `POST` | `/robot-logs/vision-align` | 없음 | 비전 정렬 로그 생성 |
 | `GET` | `/robot-logs/vision-align` | 없음 | 비전 정렬 로그 목록 조회 |
-| `GET` | `/robot-control/demo/status` | 없음 | Gazebo 데모 실행 상태 조회 |
-| `POST` | `/robot-control/demo/start` | 없음 | Gazebo Pick/Place 데모 시작 |
-| `POST` | `/robot-control/demo/stop` | 없음 | Gazebo 데모 중지 |
+| `GET` | `/robot-control/demo/status` | 없음 | 비전 적층 데모 실행 상태 조회 |
+| `POST` | `/robot-control/demo/start` | 없음 | 4~16개 비전 적층 데모 시작 |
+| `POST` | `/robot-control/demo/stop` | 없음 | 비전 적층 데모 중지 |
 
 ## 6. 공통 데이터 타입
 
@@ -700,10 +700,12 @@ Query:
 기본 실행 명령:
 
 ```bash
-bash -lc 'source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo'
+make vision-stack-demo
 ```
 
-환경변수 `ROBOT_DEMO_COMMAND`가 있으면 기본 명령 대신 해당 값을 사용한다.
+환경변수 `ROBOT_DEMO_COMMAND`가 있으면 기본 명령 대신 해당 값을 사용한다. 요청의
+`stack_count`는 프로세스의 `STACK_COUNT` 환경변수로 전달되며 Makefile이
+`--stack-count` CLI 인자로 변환한다.
 
 로그 파일:
 
@@ -729,7 +731,8 @@ GET /robot-control/demo/status
     "running": false,
     "pid": null,
     "returncode": null,
-    "command": "bash -lc 'source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo'"
+    "command": "make vision-stack-demo",
+    "stack_count": 4
   }
 }
 ```
@@ -740,6 +743,7 @@ GET /robot-control/demo/status
 | `pid` | integer/null | 데모 프로세스 PID |
 | `returncode` | integer/null | 프로세스 종료 코드. 실행 중이면 `null` |
 | `command` | string | 실행에 사용할 데모 명령 |
+| `stack_count` | integer | 현재 또는 마지막 데모의 칩 적층 개수 |
 
 ### 10.2 데모 시작
 
@@ -749,7 +753,19 @@ POST /robot-control/demo/start
 
 인증: 없음
 
-요청 본문: 없음
+요청 본문:
+
+```json
+{
+  "stack_count": 8
+}
+```
+
+| 필드 | 타입 | 필수 | 기본값 | 제한 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| `stack_count` | integer | 아니요 | `4` | `4`~`16` | 적층할 칩 개수 |
+
+요청 본문을 생략하면 기본값 `4`를 사용한다.
 
 성공 응답: `202 Accepted`
 
@@ -758,12 +774,13 @@ POST /robot-control/demo/start
 ```json
 {
   "success": true,
-  "message": "Gazebo Pick/Place 데모를 시작했습니다.",
+  "message": "8개 칩 적층 데모를 시작했습니다.",
   "data": {
     "running": true,
     "pid": 12345,
     "returncode": null,
-    "command": "bash -lc 'source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo'",
+    "command": "make vision-stack-demo",
+    "stack_count": 8,
     "log_path": "/path/to/project/log/robot_demo.log"
   }
 }
@@ -774,12 +791,13 @@ POST /robot-control/demo/start
 ```json
 {
   "success": true,
-  "message": "Gazebo 데모가 이미 실행 중입니다.",
+  "message": "8개 칩 적층 데모가 이미 실행 중입니다.",
   "data": {
     "running": true,
     "pid": 12345,
     "returncode": null,
-    "command": "bash -lc 'source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo'"
+    "command": "make vision-stack-demo",
+    "stack_count": 8
   }
 }
 ```
@@ -788,6 +806,7 @@ POST /robot-control/demo/start
 
 | 상태 코드 | 조건 |
 | --- | --- |
+| `422` | `stack_count`가 4~16 범위를 벗어나거나 정수가 아님 |
 | `500` | 실행 명령의 첫 번째 실행 파일을 찾지 못함 |
 | `500` | OS 레벨 프로세스 시작 실패 |
 
@@ -808,12 +827,13 @@ POST /robot-control/demo/stop
 ```json
 {
   "success": true,
-  "message": "Gazebo 데모 중지 신호를 보냈습니다.",
+  "message": "비전 적층 데모 중지 신호를 보냈습니다.",
   "data": {
     "running": true,
     "pid": 12345,
     "returncode": null,
-    "command": "bash -lc 'source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo'"
+    "command": "make vision-stack-demo",
+    "stack_count": 8
   }
 }
 ```
@@ -825,12 +845,13 @@ POST /robot-control/demo/stop
 ```json
 {
   "success": true,
-  "message": "실행 중인 Gazebo 데모가 없습니다.",
+  "message": "실행 중인 비전 적층 데모가 없습니다.",
   "data": {
     "running": false,
     "pid": 12345,
     "returncode": 0,
-    "command": "bash -lc 'source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run robot_control_pkg main_controller pick_place_demo'"
+    "command": "make vision-stack-demo",
+    "stack_count": 4
   }
 }
 ```
