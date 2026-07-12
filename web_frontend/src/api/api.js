@@ -73,8 +73,11 @@ export const robotLogApi = {
 };
 
 export const robotControlApi = {
-  startDemo() {
-    return request("/robot-control/demo/start", { method: "POST" });
+  startDemo(stackCount = 4) {
+    return request("/robot-control/demo/start", {
+      method: "POST",
+      body: { stack_count: stackCount },
+    });
   },
 
   stopDemo() {

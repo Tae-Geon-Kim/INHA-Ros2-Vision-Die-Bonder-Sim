@@ -26,6 +26,9 @@ import {
 
 import MetricCard from "../components/cards/MetricCard.jsx";
 import ChartCard from "../components/charts/ChartCard.jsx";
+import StackSetupDialog, {
+  DEFAULT_STACK_COUNT,
+} from "../components/controls/StackSetupDialog.jsx";
 import PageHeader from "../components/layout/PageHeader.jsx";
 import StatusBadge from "../components/logs/StatusBadge.jsx";
 import { useAuthStore } from "../state/authStore.js";
@@ -38,6 +41,8 @@ const PIE_COLORS = ["#267a4d", "#376d86", "#a46213", "#a83b3b", "#6b7280"];
 export default function Dashboard() {
   const [demoLoading, setDemoLoading] = useState(false);
   const [demoMessage, setDemoMessage] = useState(null);
+  const [stackDialogOpen, setStackDialogOpen] = useState(false);
+  const [stackCount, setStackCount] = useState(DEFAULT_STACK_COUNT);
   const {
     refreshDashboard,
     getMetrics,
@@ -72,11 +77,12 @@ export default function Dashboard() {
     setDemoLoading(true);
     setDemoMessage(null);
     try {
-      const response = await robotControlApi.startDemo();
-      setDemoMessage(response?.message || "Gazebo demo started.");
+      const response = await robotControlApi.startDemo(stackCount);
+      setDemoMessage(response?.message || `${stackCount}-chip stack demo started.`);
+      setStackDialogOpen(false);
       await refreshDashboard();
     } catch (requestError) {
-      setDemoMessage(requestError.message || "Gazebo demo start failed.");
+      setDemoMessage(requestError.message || "Vision stack demo start failed.");
     } finally {
       setDemoLoading(false);
     }
@@ -92,12 +98,12 @@ export default function Dashboard() {
           <div className="flex flex-wrap gap-2">
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-4 text-sm font-bold text-white disabled:opacity-60"
-              onClick={startGazeboDemo}
+              onClick={() => setStackDialogOpen(true)}
               type="button"
               disabled={demoLoading}
             >
               <Play size={16} />
-              {demoLoading ? "Starting" : "Start Gazebo Demo"}
+              Start
             </button>
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
@@ -123,6 +129,15 @@ export default function Dashboard() {
           {demoMessage}
         </div>
       ) : null}
+
+      <StackSetupDialog
+        loading={demoLoading}
+        onChange={setStackCount}
+        onClose={() => setStackDialogOpen(false)}
+        onStart={startGazeboDemo}
+        open={stackDialogOpen}
+        stackCount={stackCount}
+      />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard label="Work Items" value={metrics.workTotal} icon={ClipboardList} caption="latest 200 rows" />

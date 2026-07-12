@@ -108,7 +108,7 @@ flowchart LR
         ROBOT -->|Contact / State| MC
     end
 
-    BE -->|Start Vision Stack Demo| MC
+    BE -->|Start · stack_count 4~16| MC
     VB -.->|Vision Logs| BE
     MC -.->|Work / Error Logs| BE
 ```
@@ -259,7 +259,20 @@ cd ~/ros2_vision_ws
 make frontend
 ```
 
-브라우저에서 `http://127.0.0.1:5173`에 접속하고 로그인한 뒤 **Start** 버튼을 눌러 비전 기반 칩 적층 데모를 실행합니다.
+브라우저에서 `http://127.0.0.1:5173`에 접속하고 로그인한 뒤 **Start** 버튼을 누릅니다. 설정 창에서 슬라이더로 4~16개의 칩을 선택할 수 있으며 기본값은 4개입니다. 선택한 숫자가 커질수록 미리보기의 칩도 실시간으로 쌓입니다.
+
+선택값은 `/robot-control/demo/start` API의 `stack_count`로 전달되고 백엔드는 다음과 동일한 명령을 실행합니다.
+
+```bash
+make vision-stack-demo STACK_COUNT=<선택값>
+```
+
+현재 Gazebo와 joint bridge는 시작할 때 필요한 칩 모델과 contact topic을 구성하므로 웹에서 선택할 값과 동일한 `STACK_COUNT`로 실행해야 합니다.
+
+```bash
+make gazebo-camera STACK_COUNT=8
+make joint-bridge STACK_COUNT=8
+```
 
 > 웹 버튼으로 데모를 시작했다면 별도 터미널에서 같은 데모 명령을 중복 실행하지 마세요. 두 제어 프로세스가 같은 로봇에 명령을 보내 충돌할 수 있습니다.
 
