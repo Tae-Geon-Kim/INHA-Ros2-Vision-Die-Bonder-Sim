@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await shutdown_managed_demo()
+        await shutdown_managed_demo(app.state.db_pool)
         await app.state.db_pool.close()
 
 

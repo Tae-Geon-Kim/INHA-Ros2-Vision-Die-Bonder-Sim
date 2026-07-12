@@ -9,10 +9,24 @@ CREATE TABLE IF NOT EXISTS "user" (
 CREATE TABLE IF NOT EXISTS work_history (
     history_id SERIAL PRIMARY KEY,
     die_serial_number VARCHAR(100) NOT NULL,
+    stack_count INTEGER NOT NULL DEFAULT 4,
     start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     end_time TIMESTAMP,
     status VARCHAR(20) DEFAULT 'START'
 );
+
+ALTER TABLE work_history
+    ADD COLUMN IF NOT EXISTS stack_count INTEGER NOT NULL DEFAULT 4;
+
+UPDATE work_history
+SET stack_count = substring(
+    die_serial_number FROM '^HBM-([0-9]{1,2})L-'
+)::INTEGER
+WHERE stack_count = 4
+  AND die_serial_number ~ '^HBM-([0-9]{1,2})L-'
+  AND substring(
+      die_serial_number FROM '^HBM-([0-9]{1,2})L-'
+  )::INTEGER BETWEEN 4 AND 16;
 
 CREATE TABLE IF NOT EXISTS user_logs (
     log_id BIGSERIAL PRIMARY KEY,

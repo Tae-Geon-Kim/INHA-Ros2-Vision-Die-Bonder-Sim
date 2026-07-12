@@ -113,11 +113,12 @@ export default function WorkHistory() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px] text-left text-sm">
+          <table className="w-full min-w-[900px] text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
                 <th className="px-4 py-3">ID</th>
                 <th className="px-4 py-3">Die Serial</th>
+                <th className="px-4 py-3">DRAM Dies</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Start</th>
                 <th className="px-4 py-3">End</th>
@@ -129,6 +130,7 @@ export default function WorkHistory() {
                 <tr className="border-t border-slate-100" key={item.history_id}>
                   <td className="px-4 py-3 font-bold">{item.history_id}</td>
                   <td className="px-4 py-3">{item.die_serial_number}</td>
+                  <td className="px-4 py-3 tabular-nums">{item.stack_count}</td>
                   <td className="px-4 py-3"><StatusBadge value={item.status} /></td>
                   <td className="px-4 py-3">{formatDate(item.start_time)}</td>
                   <td className="px-4 py-3">{formatDate(item.end_time)}</td>
@@ -137,7 +139,7 @@ export default function WorkHistory() {
               ))}
               {!items.length ? (
                 <tr>
-                  <td className="px-4 py-10 text-center text-sm font-semibold text-slate-500" colSpan={6}>
+                  <td className="px-4 py-10 text-center text-sm font-semibold text-slate-500" colSpan={7}>
                     No work history rows
                   </td>
                 </tr>

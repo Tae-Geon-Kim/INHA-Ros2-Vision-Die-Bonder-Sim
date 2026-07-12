@@ -18,6 +18,7 @@ erDiagram
 	work_history {
 		int history_id PK "작업 이력 고유 ID"  
 		varchar die_serial_number  "반도체 시리얼 번호"  
+		int stack_count  "적층할 DRAM die 개수"
 		timestamp start_time  "작업 시작 시간"  
 		timestamp end_time  "작업 종료 시간"  
 		varchar status  "작업 상태 (예: PICK, PLACE, DONE)"  

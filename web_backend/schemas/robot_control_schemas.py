@@ -13,3 +13,9 @@ class DemoStartRequest(BaseModel):
         le=MAX_STACK_COUNT,
         description="Number of chips to stack in the vision demo.",
     )
+    die_serial_number: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="Optional die serial number for the generated work history.",
+    )

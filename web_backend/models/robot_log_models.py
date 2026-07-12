@@ -6,16 +6,27 @@ from asyncpg import Connection
 async def insert_work_history(
     conn: Connection,
     die_serial_number: str,
+    stack_count: int,
     status: str,
     start_time: datetime,
 ):
     sql = """
-        INSERT INTO work_history (die_serial_number, status, start_time)
-        VALUES ($1, $2, $3)
-        RETURNING history_id, die_serial_number, start_time, end_time, status
+        INSERT INTO work_history (
+            die_serial_number, stack_count, status, start_time
+        )
+        VALUES ($1, $2, $3, $4)
+        RETURNING
+            history_id, die_serial_number, stack_count,
+            start_time, end_time, status
     """
 
-    return await conn.fetchrow(sql, die_serial_number, status, start_time)
+    return await conn.fetchrow(
+        sql,
+        die_serial_number,
+        stack_count,
+        status,
+        start_time,
+    )
 
 
 async def update_work_history(
@@ -30,7 +41,9 @@ async def update_work_history(
             status = COALESCE($2, status),
             end_time = COALESCE($3, end_time)
         WHERE history_id = $1
-        RETURNING history_id, die_serial_number, start_time, end_time, status
+        RETURNING
+            history_id, die_serial_number, stack_count,
+            start_time, end_time, status
     """
 
     return await conn.fetchrow(sql, history_id, status, end_time)
@@ -38,7 +51,9 @@ async def update_work_history(
 
 async def select_work_history(conn: Connection, history_id: int):
     sql = """
-        SELECT history_id, die_serial_number, start_time, end_time, status
+        SELECT
+            history_id, die_serial_number, stack_count,
+            start_time, end_time, status
         FROM work_history
         WHERE history_id = $1
     """
@@ -54,7 +69,9 @@ async def select_work_histories(
     die_serial_number: str | None = None,
 ):
     sql = """
-        SELECT history_id, die_serial_number, start_time, end_time, status
+        SELECT
+            history_id, die_serial_number, stack_count,
+            start_time, end_time, status
         FROM work_history
         WHERE ($1::varchar IS NULL OR status = $1)
           AND ($2::varchar IS NULL OR die_serial_number ILIKE '%' || $2 || '%')

@@ -19,8 +19,8 @@ function StackPreview({ count }) {
 
       <div className="relative h-48 w-64" aria-hidden="true">
         <div className="absolute bottom-0 left-1/2 h-4 w-52 -translate-x-1/2 rounded-[50%] bg-emerald-950/15 blur-md" />
-        <div className="absolute bottom-2 left-1/2 h-5 w-52 -translate-x-1/2 rounded-md border border-slate-500/30 bg-gradient-to-b from-slate-300 to-slate-500 shadow-lg">
-          <div className="mx-auto mt-1 h-1 w-32 rounded-full bg-white/40" />
+        <div className="absolute bottom-2 left-1/2 h-5 w-52 -translate-x-1/2 rounded-md border border-emerald-950/40 bg-gradient-to-b from-emerald-500 to-emerald-800 shadow-lg">
+          <div className="mx-auto mt-1 h-1 w-32 rounded-full bg-emerald-100/55" />
         </div>
 
         {Array.from({ length: count }, (_, index) => {
@@ -29,7 +29,7 @@ function StackPreview({ count }) {
 
           return (
             <div
-              className="absolute left-1/2 h-3.5 w-36 rounded-[4px] border border-emerald-950/35 bg-gradient-to-r from-emerald-700 via-emerald-400 to-emerald-700 shadow-[0_4px_7px_rgba(15,61,42,0.22)] transition-all duration-300 ease-out"
+              className="absolute left-1/2 h-3.5 w-36 rounded-[4px] border border-slate-700/45 bg-gradient-to-r from-slate-500 via-slate-200 to-slate-500 shadow-[0_4px_7px_rgba(30,41,59,0.22)] transition-all duration-300 ease-out"
               key={index}
               style={{
                 bottom: `${24 + index * 9}px`,
@@ -37,7 +37,7 @@ function StackPreview({ count }) {
                 zIndex: index + 1,
               }}
             >
-              <div className="mx-auto mt-0.5 h-1 w-24 rounded-full bg-emerald-100/50" />
+              <div className="mx-auto mt-0.5 h-1 w-24 rounded-full bg-white/55" />
               {isTopChip ? (
                 <div className="absolute -right-2 -top-2 h-4 w-4 animate-pulse rounded-full border-2 border-white bg-amber-400 shadow" />
               ) : null}

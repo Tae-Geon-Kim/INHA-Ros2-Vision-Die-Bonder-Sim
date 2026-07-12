@@ -40,48 +40,6 @@ DEFAULT_STATE = {
     "chip_z": 0.0,
     "chip_theta_deg": 0.0,
 }
-MIN_STACK_COUNT = 4
-MAX_STACK_COUNT = 16
-
-
-def validate_stack_count(value):
-    try:
-        stack_count = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f'stack_count는 정수여야 합니다: {value}') from exc
-    if not MIN_STACK_COUNT <= stack_count <= MAX_STACK_COUNT:
-        raise ValueError(
-            f'stack_count는 {MIN_STACK_COUNT}~{MAX_STACK_COUNT} 범위여야 합니다: '
-            f'{stack_count}'
-        )
-    return stack_count
-
-
-def stack_count_arg(value):
-    try:
-        return validate_stack_count(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(str(exc)) from exc
-
-
-def chip_model_name(layer_number):
-    return 'check_chip' if layer_number == 1 else f'check_chip_{layer_number}'
-
-
-def chip_pick_specs():
-    """Return default pick poses in mm/deg, preserving the original first two."""
-    specs = [
-        (500.0, 400.0, 0.0),
-        (500.0, 0.0, 30.0),
-    ]
-    for x_mm in (500.0, 400.0, 300.0, 200.0):
-        for y_mm in (400.0, 200.0, 0.0, -200.0, -400.0):
-            if any((x_mm, y_mm) == spec[:2] for spec in specs):
-                continue
-            specs.append((x_mm, y_mm, 0.0))
-            if len(specs) == MAX_STACK_COUNT:
-                return specs
-    return specs
 
 
 def load_state():
@@ -187,15 +145,18 @@ class MainControllerNode(Node):
             '/robot/active_stack_pair',
             10,
         )
-        
+
         # 그리퍼 중심점 기준 카메라의 상대 위치 오프셋
-        self.GRIPPER_TO_CAMERA_DX = 50.0  
-        self.GRIPPER_TO_CAMERA_DY = 20.0  
-        
+        self.GRIPPER_TO_CAMERA_DX = 50.0
+        self.GRIPPER_TO_CAMERA_DY = 20.0
+
         # 수직 방향(Z) 제어 높이
         self.BASE_TOP_Z = float(os.environ.get("ROBOT_CONTROL_BASE_TOP_Z_MM", "50.0"))
         self.CHIP_THICKNESS_MM = float(os.environ.get("ROBOT_CONTROL_CHIP_THICKNESS_MM", "0.1"))
-        self.SUBSTRATE_THICKNESS_MM = float(os.environ.get("ROBOT_CONTROL_SUBSTRATE_THICKNESS_MM", "5.0"))
+        self.SUBSTRATE_THICKNESS_MM = float(os.environ.get(
+            "ROBOT_CONTROL_SUBSTRATE_THICKNESS_MM",
+            "5.0",
+        ))
         self.GRIPPER_CONTACT_OFFSET_MM = float(os.environ.get(
             "ROBOT_CONTROL_GRIPPER_CONTACT_OFFSET_MM",
             "0.0",
@@ -225,7 +186,10 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_PICK_Z_MM",
             str(self.BASE_TOP_Z + self.CHIP_THICKNESS_MM + self.GRIPPER_CONTACT_OFFSET_MM),
         ))
-        self.CHIP_REST_Z = float(os.environ.get("ROBOT_CONTROL_CHIP_REST_Z_MM", str(self.BASE_TOP_Z)))
+        self.CHIP_REST_Z = float(os.environ.get(
+            "ROBOT_CONTROL_CHIP_REST_Z_MM",
+            str(self.BASE_TOP_Z),
+        ))
         self.SUBSTRATE_TOP_Z = float(os.environ.get(
             "ROBOT_CONTROL_SUBSTRATE_TOP_Z_MM",
             str(
@@ -552,9 +516,15 @@ class MainControllerNode(Node):
             str((self.BASE_TOP_Z + self.CHIP_THICKNESS_MM / 2.0) * 0.001),
         ))
         self.ABS_Z_ZERO_WORLD_M = float(os.environ.get("ROBOT_CONTROL_ABS_Z_ZERO_WORLD_M", "0.0"))
-        self.CHIP_MIN_CARRIED_HEIGHT_M = float(os.environ.get("ROBOT_CONTROL_CHIP_MIN_CARRIED_HEIGHT_M", "0.003"))
+        self.CHIP_MIN_CARRIED_HEIGHT_M = float(os.environ.get(
+            "ROBOT_CONTROL_CHIP_MIN_CARRIED_HEIGHT_M",
+            "0.003",
+        ))
         self.WAIT_FOR_CHIP_SERVICE = env_flag("ROBOT_CONTROL_WAIT_FOR_CHIP_SERVICE", True)
-        self.CHIP_SERVICE_TIMEOUT_MS = int(os.environ.get("ROBOT_CONTROL_CHIP_SERVICE_TIMEOUT_MS", "1000"))
+        self.CHIP_SERVICE_TIMEOUT_MS = int(os.environ.get(
+            "ROBOT_CONTROL_CHIP_SERVICE_TIMEOUT_MS",
+            "1000",
+        ))
         self.COMMAND_LIMITS_MM = {
             "x": (-260.0, 540.0),
             # Source endpoints are +/-400 mm; retain 5 mm for vision servoing.
@@ -1735,13 +1705,13 @@ class MainControllerNode(Node):
         self.last_sent_y = y
         self.last_sent_z = z
         self.last_sent_theta_deg = target_theta
-        
+
         msg = Pose()
         msg.position.x = float(x)
         msg.position.y = float(y)
         msg.position.z = float(z)
         set_pose_yaw(msg, target_theta)
-        
+
         # 하드웨어로 명령 전송
         self.cmd_pub.publish(msg)
         self.get_logger().debug(
@@ -2063,11 +2033,11 @@ class MainControllerNode(Node):
         """
 
         self.get_logger().info(f'카메라를 칩({chip_x}, {chip_y}) 정중앙에 위치시킵니다.')
-        
+
         # 기구적 오프셋 보정 계산
         target_x = chip_x - self.GRIPPER_TO_CAMERA_DX
         target_y = chip_y - self.GRIPPER_TO_CAMERA_DY
-        
+
         # 안전 높이에서 이동 실행 (기억 로직 포함)
         self.publish_move(target_x, target_y, self.HOVER_Z)
 
@@ -2079,7 +2049,7 @@ class MainControllerNode(Node):
         """
 
         self.get_logger().info(f'구역 B({b_x}, {b_y})로 칩 이송을 시작합니다.')
-        
+
         # place 목표 좌표로 이동 (기억 로직 포함)
         self.publish_move(b_x, b_y, self.HOVER_Z)
 
@@ -2515,14 +2485,25 @@ class MainControllerNode(Node):
             return False
 
         normalized = str(reference_set).strip().lower()
+        if normalized == 'place_empty':
+            self.get_logger().info(
+                'place_empty 기준 장면: chip은 시야 밖에 두고 '
+                'substrate bond joint를 생성하지 않습니다.'
+            )
+            return True
         if normalized == 'pick':
             topic = self.ATTACH_TOPIC
             parent = 'theta_link_1'
             attached = self.attach_red_chip_to_picker(require_contact=False)
-        else:
+        elif normalized == 'place_stacked':
             topic = self.SUBSTRATE_ATTACH_TOPIC
             parent = 'substrate_link'
             attached = self.attach_chip_to_substrate(require_contact=False)
+        else:
+            self.get_logger().error(
+                f'지원하지 않는 기준 영상 세트입니다: {reference_set}'
+            )
+            return False
 
         if not attached:
             self.get_logger().error(
@@ -2560,6 +2541,7 @@ class MainControllerNode(Node):
         hidden_x = self.REFERENCE_HIDDEN_X_M
         hidden_y = self.REFERENCE_HIDDEN_Y_M
         hidden_z = (self.BASE_TOP_Z + self.CHIP_THICKNESS_MM / 2.0) * 0.001
+        expected_chip_pose = None
         if normalized == 'pick':
             scene_ok = self.set_gazebo_model_pose(
                 self.SUBSTRATE_MODEL,
@@ -2573,6 +2555,12 @@ class MainControllerNode(Node):
                 self.BASE_TOP_Z,
                 theta_deg=0.0,
             ) and scene_ok
+            expected_chip_pose = (
+                self.GRIPPER_HOME_X,
+                self.GRIPPER_HOME_Y,
+                self.BASE_TOP_Z,
+                0.0,
+            )
         elif normalized == 'place_empty':
             scene_ok = self.set_substrate_pose_abs(
                 self.SUBSTRATE_CENTER_X,
@@ -2595,9 +2583,28 @@ class MainControllerNode(Node):
                 self.substrate_top_z_mm(),
                 theta_deg=0.0,
             ) and scene_ok
+            expected_chip_pose = (
+                self.SUBSTRATE_CENTER_X,
+                self.SUBSTRATE_CENTER_Y,
+                self.substrate_top_z_mm(),
+                0.0,
+            )
 
         if not scene_ok:
             self.get_logger().error('기준 영상용 Gazebo 장면 배치에 실패했습니다.')
+            return False
+
+        if (
+            expected_chip_pose is not None
+            and not self.wait_for_red_chip_pose_abs(
+                *expected_chip_pose,
+                timeout_sec=self.VISION_REFERENCE_LOCK_SETTLE_SEC,
+            )
+        ):
+            self.get_logger().error(
+                f'{normalized} 기준 장면의 chip 자세 확인 실패: '
+                f'target={expected_chip_pose}'
+            )
             return False
 
         if not self.lock_vision_reference_chip(normalized):
@@ -2619,8 +2626,25 @@ class MainControllerNode(Node):
                 '기준 장면 고정 후 gripper/camera 자세가 안정되지 않았습니다.'
             )
             return False
+        if (
+            expected_chip_pose is not None
+            and not self.wait_for_red_chip_pose_abs(
+                *expected_chip_pose,
+                timeout_sec=self.VISION_REFERENCE_LOCK_SETTLE_SEC,
+            )
+        ):
+            self.get_logger().error(
+                f'{normalized} 기준 장면 고정 후 chip 자세가 변경됐습니다: '
+                f'target={expected_chip_pose}'
+            )
+            return False
+        scene_state = (
+            'camera/gripper/substrate 정착, chip 시야 밖 배치'
+            if normalized == 'place_empty'
+            else 'camera/gripper/chip/substrate 고정'
+        )
         self.get_logger().info(
-            '기준 장면 정착 확인 완료: camera/gripper/chip/substrate 고정 상태에서 촬영합니다.'
+            f'기준 장면 정착 확인 완료: {scene_state} 상태에서 촬영합니다.'
         )
         return True
 
@@ -3660,16 +3684,6 @@ class MainControllerNode(Node):
             self.get_logger().error(str(exc))
             return False
 
-        requested_count = (
-            self.STACK_COUNT
-            if stack_count is None
-            else validate_stack_count(stack_count)
-        )
-        if requested_count > len(self.CHIP_MODELS):
-            raise ValueError(
-                f'controller가 {len(self.CHIP_MODELS)}개 chip으로 초기화되어 '
-                f'{requested_count}개 적층을 실행할 수 없습니다.'
-            )
         chip_height = self.CHIP_REST_Z if chip_z is None else float(chip_z)
         target_place_x = self.SUBSTRATE_CENTER_X if place_x is None else float(place_x)
         target_place_y = self.SUBSTRATE_CENTER_Y if place_y is None else float(place_y)
@@ -4055,6 +4069,7 @@ class MainControllerNode(Node):
 
         self.get_logger().info('range_demo 완료')
 
+
 def main(args=None):
     rclpy.init(args=args)
     parser = build_parser()
@@ -4354,6 +4369,7 @@ def run_command(node, args):
     rclpy.spin_once(node, timeout_sec=0.1)
     time.sleep(0.5)
     return command_result
+
 
 if __name__ == '__main__':
     main()

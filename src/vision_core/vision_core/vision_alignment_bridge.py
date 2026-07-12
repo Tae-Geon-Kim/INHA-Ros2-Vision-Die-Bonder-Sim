@@ -25,6 +25,13 @@ DEFAULT_MICRO_TOPICS = [
     "/vision/micro_camera_4/image_raw",
 ]
 
+MICRO_CAMERA_TYPES = (
+    "MICRO_TL",
+    "MICRO_TR",
+    "MICRO_BL",
+    "MICRO_BR",
+)
+
 PLACE_MICRO_MARKER_ROIS = [
     (0.5, 0.0, 1.0, 0.5),
     (0.0, 0.0, 0.5, 0.5),
@@ -38,6 +45,8 @@ CHIP_MICRO_MARKER_ROIS = [
     (0.5, 0.0, 1.0, 0.5),
     (0.0, 0.0, 0.5, 0.5),
 ]
+
+STACKED_REFERENCE_MIN_CHIP_EXCESS = 5.0
 
 
 def add_vision_node_to_path():
@@ -596,6 +605,8 @@ class VisionAlignmentBridge(Node):
             f"processing={float(payload.get('processing_ms', 0.0)):.1f}ms"
         )
         self.publish_result(payload)
+        if payload.get("success") and request["action"] == "align":
+            self.post_backend_log(payload)
 
     def reference_set_dir(self, reference_set: str) -> Path:
         normalized = reference_set.strip().lower()
@@ -635,6 +646,10 @@ class VisionAlignmentBridge(Node):
             for index, topic in enumerate(self.micro_topics, start=1)
         })
 
+        scene_validation = None
+        if reference_set == "place_stacked":
+            scene_validation = self.validate_stacked_reference_frames(frames)
+
         for name, frame in frames.items():
             final_path = image_paths[name]
             temporary_path = final_path.with_name(
@@ -655,6 +670,8 @@ class VisionAlignmentBridge(Node):
             "gripper_pose_mm": self.current_pose,
             "images": {name: path.name for name, path in image_paths.items()},
         }
+        if scene_validation is not None:
+            metadata["scene_validation"] = scene_validation
         metadata_path = output_dir / "metadata.json"
         temporary_metadata_path = output_dir / ".metadata.tmp.json"
         temporary_metadata_path.write_text(
@@ -671,12 +688,83 @@ class VisionAlignmentBridge(Node):
             "image_count": 5,
         }
 
+    @staticmethod
+    def mean_abs_roi_difference(
+        first: np.ndarray,
+        second: np.ndarray,
+        normalized_roi: tuple[float, float, float, float],
+    ) -> float:
+        if first.shape != second.shape:
+            raise ValueError(
+                "reference frame shape mismatch: "
+                f"first={first.shape}, second={second.shape}"
+            )
+        height, width = first.shape[:2]
+        x0, y0, x1, y1 = normalized_roi
+        left, right = int(x0 * width), int(x1 * width)
+        top, bottom = int(y0 * height), int(y1 * height)
+        first_roi = first[top:bottom, left:right].astype(np.int16)
+        second_roi = second[top:bottom, left:right].astype(np.int16)
+        return float(np.abs(first_roi - second_roi).mean())
+
+    def validate_stacked_reference_frames(self, frames: dict) -> dict:
+        empty_dir = self.reference_set_dir("place_empty")
+        chip_differences = []
+        substrate_differences = []
+        for index in range(1, 5):
+            empty_path = empty_dir / f"micro_{index}.png"
+            if not empty_path.is_file():
+                raise FileNotFoundError(
+                    "place_stacked 촬영 전에 place_empty 기준 영상이 필요합니다: "
+                    f"{empty_path}"
+                )
+            empty_frame = self.load_reference_image(empty_path)
+            stacked_frame = frames[f"micro_{index}"]
+            chip_differences.append(self.mean_abs_roi_difference(
+                empty_frame,
+                stacked_frame,
+                CHIP_MICRO_MARKER_ROIS[index - 1],
+            ))
+            substrate_differences.append(self.mean_abs_roi_difference(
+                empty_frame,
+                stacked_frame,
+                PLACE_MICRO_MARKER_ROIS[index - 1],
+            ))
+
+        chip_difference = float(np.median(chip_differences))
+        substrate_difference = float(np.median(substrate_differences))
+        chip_excess = chip_difference - substrate_difference
+        if chip_excess < STACKED_REFERENCE_MIN_CHIP_EXCESS:
+            raise ValueError(
+                "place_stacked 장면에서 substrate 위 chip을 확인하지 못했습니다: "
+                f"chip_roi_diff={chip_difference:.3f}, "
+                f"substrate_roi_diff={substrate_difference:.3f}, "
+                f"required_excess={STACKED_REFERENCE_MIN_CHIP_EXCESS:.3f}"
+            )
+
+        self.get_logger().info(
+            "place_stacked 장면 검증 완료: "
+            f"chip_roi_diff={chip_difference:.3f}, "
+            f"substrate_roi_diff={substrate_difference:.3f}, "
+            f"chip_excess={chip_excess:.3f}"
+        )
+        return {
+            "chip_roi_difference": chip_difference,
+            "substrate_roi_difference": substrate_difference,
+            "chip_excess": chip_excess,
+        }
+
     def align_reference_set(self, request: dict) -> dict:
         stage = str(request.get("stage", "micro")).strip().lower()
         target = str(request.get("target", "pick")).strip().lower()
         is_pick = target == "pick"
         requested_reference_set = str(request.get("reference_set", ""))
-        reference_set = requested_reference_set if is_pick else "place_empty"
+        if is_pick:
+            reference_set = requested_reference_set
+        else:
+            # Place feedback always follows exposed substrate corner markers.
+            # A stacked chip must not influence the alignment command.
+            reference_set = "place_empty"
         reference_dir = self.reference_set_dir(reference_set)
         request_frames = request["frames"]
 
@@ -860,17 +948,44 @@ class VisionAlignmentBridge(Node):
     def post_backend_log(self, payload: dict) -> None:
         if not self.backend_log_url or self.history_id <= 0:
             return
-        if self.alignment_process not in {"pick", "place"}:
+
+        target = str(
+            payload.get("target", self.alignment_process)
+        ).strip().lower()
+        if target not in {"pick", "place"}:
             return
 
-        body = {
+        common = {
             "history_id": self.history_id,
-            "process_step": self.alignment_process.upper(),
-            "camera_type": self.camera_type,
-            "offset_x": payload["dx"],
-            "offset_y": payload["dy"],
-            "offset_theta": payload["dtheta"],
+            "process_step": target.upper(),
         }
+        stage = str(payload.get("stage", "")).strip().lower()
+        per_camera = payload.get("per_camera")
+        if stage == "micro" and isinstance(per_camera, list):
+            body = []
+            for result in per_camera:
+                camera_index = int(result.get("camera_index", 0))
+                if not 1 <= camera_index <= len(MICRO_CAMERA_TYPES):
+                    continue
+                body.append({
+                    **common,
+                    "camera_type": MICRO_CAMERA_TYPES[camera_index - 1],
+                    "offset_x": float(result["dx"]),
+                    "offset_y": float(result["dy"]),
+                    "offset_theta": float(result["dtheta"]),
+                })
+            if not body:
+                return
+        else:
+            camera_type = "MACRO" if stage == "macro" else self.camera_type
+            body = {
+                **common,
+                "camera_type": camera_type,
+                "offset_x": float(payload["dx"]),
+                "offset_y": float(payload["dy"]),
+                "offset_theta": float(payload["dtheta"]),
+            }
+
         request = urllib.request.Request(
             self.backend_log_url,
             data=json.dumps(body).encode("utf-8"),

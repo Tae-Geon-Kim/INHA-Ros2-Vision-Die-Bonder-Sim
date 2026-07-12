@@ -53,6 +53,7 @@ async def create_work_history_service(conn: Connection, data: WorkHistoryCreate)
     row = await insert_work_history(
         conn=conn,
         die_serial_number=data.die_serial_number,
+        stack_count=data.stack_count,
         status=data.status,
         start_time=_to_db_timestamp(data.start_time) or _now_kst(),
     )
