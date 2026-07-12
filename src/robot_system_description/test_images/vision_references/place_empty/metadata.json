@@ -1,0 +1,17 @@
+{
+  "reference_set": "place_empty",
+  "captured_at": 1783840286.5847712,
+  "gripper_pose_mm": {
+    "x": 140.0,
+    "y": 0.0,
+    "z": 165.0,
+    "theta_deg": 0.0
+  },
+  "images": {
+    "macro": "macro.png",
+    "micro_1": "micro_1.png",
+    "micro_2": "micro_2.png",
+    "micro_3": "micro_3.png",
+    "micro_4": "micro_4.png"
+  }
+}

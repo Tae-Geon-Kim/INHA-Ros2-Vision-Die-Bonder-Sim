@@ -14,3 +14,14 @@ __pycache__/
 # 4. OS 및 에디터 캐시
 .DS_Store
 .vscode/
+
+.venv/
+
+# 5. Frontend dependencies/build output
+node_modules/
+dist/
+web_frontend/node_modules/
+web_frontend/dist/
+
+# 6. Automated database CSV archives
+data_archives/

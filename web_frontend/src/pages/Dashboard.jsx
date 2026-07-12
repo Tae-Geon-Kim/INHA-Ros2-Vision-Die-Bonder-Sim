@@ -1,0 +1,357 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ClipboardList,
+  Database,
+  Play,
+  Square,
+} from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+import MetricCard from "../components/cards/MetricCard.jsx";
+import ChartCard, {
+  AlignmentConvergenceChart,
+} from "../components/charts/ChartCard.jsx";
+import StackSetupDialog, {
+  DEFAULT_STACK_COUNT,
+} from "../components/controls/StackSetupDialog.jsx";
+import PageHeader, { ServerStatus } from "../components/layout/PageHeader.jsx";
+import StatusBadge from "../components/logs/StatusBadge.jsx";
+import { useAuthStore } from "../state/authStore.js";
+import { useRobotLogStore } from "../state/store.js";
+import { formatDate } from "../utils/format.js";
+import { robotControlApi } from "../api/api.js";
+
+const PIE_COLORS = ["#267a4d", "#376d86", "#a46213", "#a83b3b", "#6b7280"];
+
+export default function Dashboard() {
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoStopping, setDemoStopping] = useState(false);
+  const [demoMessage, setDemoMessage] = useState(null);
+  const [demoError, setDemoError] = useState(null);
+  const [demoStatus, setDemoStatus] = useState(null);
+  const [stackDialogOpen, setStackDialogOpen] = useState(false);
+  const [stackCount, setStackCount] = useState(DEFAULT_STACK_COUNT);
+  const {
+    refreshDashboard,
+    getMetrics,
+    getCharts,
+    work,
+    errors,
+    error,
+    unauthorized,
+    lastUpdated,
+  } = useRobotLogStore();
+  const { requireLogin } = useAuthStore();
+
+  useEffect(() => {
+    refreshDashboard();
+    const refreshTimer = window.setInterval(
+      () => refreshDashboard({ background: true }),
+      1000,
+    );
+    return () => window.clearInterval(refreshTimer);
+  }, [refreshDashboard]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshDemoStatus = async () => {
+      try {
+        const response = await robotControlApi.getDemoStatus();
+        if (!cancelled) setDemoStatus(response?.data || null);
+      } catch {
+        // The log dashboard can still be used while the simulator is offline.
+      }
+    };
+
+    refreshDemoStatus();
+    const statusTimer = window.setInterval(refreshDemoStatus, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(statusTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (unauthorized) {
+      requireLogin(error || "로그인이 필요합니다.");
+    }
+  }, [error, requireLogin, unauthorized]);
+
+  const metrics = getMetrics();
+  const charts = getCharts();
+  const recentWork = useMemo(() => work.slice(0, 8), [work]);
+  const latestErrors = useMemo(() => errors.slice(0, 8), [errors]);
+
+  const simulatorRunning = Boolean(
+    demoStatus?.running
+      || demoStatus?.infrastructure_running
+      || Object.values(demoStatus?.processes || {}).some(
+        (process) => process?.running,
+      ),
+  );
+  const startVisionStackDemo = async () => {
+    setDemoLoading(true);
+    setDemoMessage(null);
+    setDemoError(null);
+    try {
+      const response = await robotControlApi.startDemo(stackCount);
+      setDemoStatus(response?.data || null);
+      setDemoMessage(
+        response?.message || `${stackCount}개 칩 적층 시스템을 시작했습니다.`,
+      );
+      setStackDialogOpen(false);
+      await refreshDashboard();
+    } catch (requestError) {
+      setDemoError(
+        requestError.message || "비전 적층 시스템을 시작하지 못했습니다.",
+      );
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const stopVisionStackDemo = async () => {
+    setDemoStopping(true);
+    setDemoMessage(null);
+    setDemoError(null);
+    try {
+      const response = await robotControlApi.stopDemo();
+      setDemoStatus(response?.data || null);
+      setDemoMessage(response?.message || "비전 적층 시스템을 중지했습니다.");
+    } catch (requestError) {
+      setDemoMessage(
+        requestError.message || "비전 적층 시스템을 중지하지 못했습니다.",
+      );
+    } finally {
+      setDemoStopping(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="INHA ROS2 Vision"
+        title="Robot Log Monitoring"
+        description="작업 이력, 로봇 에러, 비전 정렬 로그를 한 화면에서 확인하는 React 기반 대시보드입니다."
+        actions={
+          <div className="w-[220px]">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-ink px-2 text-sm font-bold text-white disabled:opacity-60"
+                onClick={() => {
+                  setDemoError(null);
+                  setStackDialogOpen(true);
+                }}
+                type="button"
+                disabled={demoLoading || demoStopping}
+              >
+                <Play size={16} />
+                Start
+              </button>
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-2 text-sm font-bold text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={stopVisionStackDemo}
+                type="button"
+                disabled={!simulatorRunning || demoLoading || demoStopping}
+              >
+                <Square size={14} fill="currentColor" />
+                {demoStopping ? "Stopping..." : "Stop"}
+              </button>
+            </div>
+            <ServerStatus className="mt-2 w-full" />
+          </div>
+        }
+      />
+
+      {error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+          {error}
+        </div>
+      ) : null}
+
+      {demoMessage ? (
+        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-panel">
+          {demoMessage}
+        </div>
+      ) : null}
+
+      <StackSetupDialog
+        error={demoError}
+        loading={demoLoading}
+        onChange={setStackCount}
+        onClose={() => {
+          setDemoError(null);
+          setStackDialogOpen(false);
+        }}
+        onStart={startVisionStackDemo}
+        open={stackDialogOpen}
+        stackCount={stackCount}
+      />
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="Work Items" value={metrics.workTotal} icon={ClipboardList} caption="latest 200 rows" />
+        <MetricCard label="Open Work" value={metrics.openWork} icon={Activity} tone="signal" caption="START or RUNNING" />
+        <MetricCard label="Error Logs" value={metrics.errorTotal} icon={AlertTriangle} tone="ember" caption="all levels" />
+        <MetricCard label="Fatal Errors" value={metrics.fatalErrors} icon={AlertTriangle} tone="amber" caption="requires action" />
+        <MetricCard label="Align Logs" value={metrics.alignTotal} icon={Database} tone="signal" caption="vision offsets" />
+      </section>
+
+      <AlignmentConvergenceChart work={work} />
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)]">
+        <ChartCard title="Hourly Log Trend" description="작업 시작, 에러, 비전 정렬 로그를 시간대별로 집계합니다.">
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={charts.timeline}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" tick={{ fontSize: 12 }} />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="work" stroke="#267a4d" strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="errors" stroke="#a83b3b" strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="align" stroke="#376d86" strokeWidth={3} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+
+        <ChartCard title="Work Status" description="작업 상태 분포">
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={charts.statusDistribution}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={62}
+                  outerRadius={104}
+                  paddingAngle={4}
+                >
+                  {charts.statusDistribution.map((entry, index) => (
+                    <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-2">
+        <ChartCard title="Error Frequency" description="에러 레벨별 발생 빈도">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={charts.errorFrequency}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="value" fill="#a83b3b" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+
+        <ChartCard title="Camera Distribution" description="카메라 타입별 비전 정렬 로그 수">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={charts.cameraDistribution}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="value" fill="#376d86" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-white shadow-panel">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="font-black text-ink">Recent Work</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">ID</th>
+                  <th className="px-4 py-3">Die Serial</th>
+                  <th className="px-4 py-3">DRAM Dies</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Start</th>
+                  <th className="px-4 py-3">End</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentWork.map((item) => (
+                  <tr className="border-t border-slate-100" key={item.history_id}>
+                    <td className="px-4 py-3 font-bold">{item.history_id}</td>
+                    <td className="px-4 py-3">{item.die_serial_number}</td>
+                    <td className="px-4 py-3 tabular-nums">{item.stack_count}</td>
+                    <td className="px-4 py-3"><StatusBadge value={item.status} /></td>
+                    <td className="px-4 py-3">{formatDate(item.start_time)}</td>
+                    <td className="px-4 py-3">{formatDate(item.end_time)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white shadow-panel">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="font-black text-ink">Latest Errors</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Time</th>
+                  <th className="px-4 py-3">Level</th>
+                  <th className="px-4 py-3">Code</th>
+                  <th className="px-4 py-3">Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {latestErrors.map((item) => (
+                  <tr className="border-t border-slate-100" key={item.log_id}>
+                    <td className="px-4 py-3">{formatDate(item.error_time)}</td>
+                    <td className="px-4 py-3"><StatusBadge value={item.error_level} /></td>
+                    <td className="px-4 py-3 font-mono text-xs">{item.error_code || "-"}</td>
+                    <td className="px-4 py-3 text-slate-600">{item.detail || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <p className="text-xs text-slate-500">
+        Last updated: {lastUpdated ? formatDate(lastUpdated) : "-"}
+      </p>
+    </div>
+  );
+}

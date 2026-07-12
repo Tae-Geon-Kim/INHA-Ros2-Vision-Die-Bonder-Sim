@@ -1,0 +1,24 @@
+robot_system_controller:
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50
+
+  joint_x_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: joint_x
+    pid: {p: 650.0, i: 8.0, d: 75.0}
+
+  joint_y_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: joint_y
+    pid: {p: 500.0, i: 6.0, d: 60.0}
+
+  joint_z_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: joint_z
+    pid: {p: 900.0, i: 20.0, d: 45.0}
+
+  joint_theta_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: joint_theta
+    pid: {p: 0.3, i: 0.0, d: 0.03}
