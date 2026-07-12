@@ -16,6 +16,7 @@ class PaginationParams(BaseModel):
 
 class WorkHistoryCreate(BaseModel):
     die_serial_number: str = Field(..., min_length=1, max_length=100)
+    stack_count: int = Field(default=4, ge=4, le=16)
     status: WorkStatus = "START"
     start_time: datetime | None = None
 
@@ -33,6 +34,7 @@ class WorkHistoryUpdate(BaseModel):
 class WorkHistoryResponse(BaseModel):
     history_id: int
     die_serial_number: str
+    stack_count: int
     start_time: datetime
     end_time: datetime | None = None
     status: str

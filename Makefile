@@ -4,6 +4,7 @@ ROS_SETUP ?= /opt/ros/humble/setup.bash
 GAZEBO_ENV := IGN_IP=127.0.0.1 GZ_IP=127.0.0.1 IGN_PARTITION=inha_die_bonder GZ_PARTITION=inha_die_bonder
 GAZEBO_RENDER_MODE ?= auto
 GAZEBO_RENDER_ENGINE ?= ogre
+GAZEBO_GUI_RENDER_ENGINE ?= ogre2
 GAZEBO_GPU_ADAPTER ?=
 
 GPU_USER ?= team05
@@ -52,7 +53,6 @@ CHIP_Y ?= 400
 
 PICK_X ?= 500
 PICK_Y ?= 400
-STACK_COUNT ?= 4
 STACK_FIRST_PICK_Y ?= 400
 STACK_LAST_PICK_Y ?= -400
 STACK_FIRST_CHIP_THETA_DEG ?= 0
@@ -66,7 +66,7 @@ CONTACT_Z ?= 50.1
 SETTLE_SEC ?= 3.0
 
 .PHONY: help \
-	install-backend install-frontend check-env db-tunnel init-db register-user backend frontend \
+	install-backend install-frontend check-env check-node db-tunnel init-db register-user backend frontend \
 	ros-build gazebo gazebo-camera joint-bridge vision-bridge vision-bridge-auto \
 	gazebo-render-check \
 	model-list safe chip-reset demo range-demo vision-ref-pick vision-ref-place-empty \
@@ -80,6 +80,7 @@ help: ## Show available make targets.
 	@printf "  make ros-build\n"
 	@printf "  make gazebo-render-check\n"
 	@printf "  make gazebo-camera\n"
+	@printf "  make gazebo-camera GAZEBO_RENDER_MODE=gpu\n"
 	@printf "  make gazebo-camera GAZEBO_RENDER_MODE=software\n"
 	@printf "  make joint-bridge STACK_COUNT=4\n"
 	@printf "  make vision-bridge VISION_PROCESS=pick\n"
@@ -104,6 +105,8 @@ define run_with_reference_vision_bridge
 		result_topic:="$$vision_result_topic" \
 		request_timeout_sec:=$(VISION_REQUEST_TIMEOUT_SEC) \
 		opencv_threads:=$(VISION_OPENCV_THREADS) \
+		backend_log_url:="$(BACKEND_LOG_URL)" \
+		history_id:=$(HISTORY_ID) \
 		reference_dir:="$(VISION_REFERENCE_DIR)" \
 		macro_pixel_size_x_mm:=$(MACRO_PIXEL_SIZE_X) \
 		macro_pixel_size_y_mm:=$(MACRO_PIXEL_SIZE_Y) \
@@ -122,16 +125,19 @@ endef
 define configure_gazebo_rendering
 	render_mode="$(GAZEBO_RENDER_MODE)"; \
 	render_engine="$(GAZEBO_RENDER_ENGINE)"; \
-	gpu_backend=""; \
+	gui_render_engine="$(GAZEBO_GUI_RENDER_ENGINE)"; \
+	gpu_backend="system-default"; \
 	gpu_adapter="$(GAZEBO_GPU_ADAPTER)"; \
+	split_gui_software=1; \
 	case "$$render_mode" in auto|gpu|software) ;; *) \
 		echo "GAZEBO_RENDER_MODE must be auto, gpu, or software: $$render_mode"; exit 2 ;; \
 	esac; \
 	if [ "$$render_mode" != "software" ]; then \
+		unset LIBGL_ALWAYS_SOFTWARE; \
 		if [ -e /dev/dxg ] && [ -f /usr/lib/x86_64-linux-gnu/dri/d3d12_dri.so ]; then \
 			gpu_backend="WSLg-D3D12"; \
 			if [ -z "$$gpu_adapter" ] && command -v powershell.exe >/dev/null 2>&1; then \
-				gpu_names="$$(powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_VideoController | ForEach-Object { \$$_.Name }" 2>/dev/null | tr -d '\r')"; \
+				gpu_names="$$(timeout 2s powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_VideoController | ForEach-Object { \$$_.Name }" 2>/dev/null | tr -d '\r')"; \
 				gpu_count="$$(printf '%s\n' "$$gpu_names" | awk 'NF { count++ } END { print count + 0 }')"; \
 				if [ "$$gpu_count" -eq 1 ]; then \
 					case "$$gpu_names" in *Intel*) gpu_adapter="Intel" ;; *NVIDIA*) gpu_adapter="NVIDIA" ;; *AMD*|*Radeon*) gpu_adapter="AMD" ;; esac; \
@@ -141,21 +147,28 @@ define configure_gazebo_rendering
 			if [ -n "$$gpu_adapter" ]; then export MESA_D3D12_DEFAULT_ADAPTER_NAME="$$gpu_adapter"; fi; \
 		elif compgen -G '/dev/dri/renderD*' >/dev/null || compgen -G '/dev/nvidia[0-9]*' >/dev/null; then \
 			gpu_backend="native-DRI"; \
+			unset GALLIUM_DRIVER MESA_D3D12_DEFAULT_ADAPTER_NAME; \
+		else \
+			if [ "$$render_mode" = "gpu" ]; then \
+				echo "Gazebo GPU mode requested, but no supported GPU device was detected."; exit 2; \
+			fi; \
+			gpu_backend="software-fallback"; \
+			export LIBGL_ALWAYS_SOFTWARE=1; \
+			unset GALLIUM_DRIVER MESA_D3D12_DEFAULT_ADAPTER_NAME; \
 		fi; \
-	fi; \
-	if [ "$$render_mode" = "software" ] || [ -z "$$gpu_backend" ]; then \
-		if [ "$$render_mode" = "gpu" ]; then \
-			echo "Gazebo GPU mode requested, but no supported GPU device was detected."; exit 2; \
-		fi; \
-		gpu_backend="software-fallback"; \
+	else \
+		gpu_backend="software"; \
 		export LIBGL_ALWAYS_SOFTWARE=1; \
 		unset GALLIUM_DRIVER MESA_D3D12_DEFAULT_ADAPTER_NAME; \
-	else \
-		unset LIBGL_ALWAYS_SOFTWARE; \
 	fi; \
 	export GAZEBO_SELECTED_RENDER_ENGINE="$$render_engine"; \
-	printf '[Gazebo render] mode=%s backend=%s adapter=%s engine=%s\n' \
-		"$$render_mode" "$$gpu_backend" "$${gpu_adapter:-default}" "$$render_engine"
+	export GAZEBO_SELECTED_GUI_RENDER_ENGINE="$$gui_render_engine"; \
+	export GAZEBO_SPLIT_GUI_SOFTWARE="$$split_gui_software"; \
+	printf '[Gazebo render] mode=%s server=%s gui=%s adapter=%s engines=%s/%s\n' \
+		"$$render_mode" "$$gpu_backend" \
+		"$$(if [ "$$split_gui_software" = "1" ]; then printf software; else printf same-as-server; fi)" \
+		"$${gpu_adapter:-default}" "$${render_engine:-gazebo-default}" \
+		"$${gui_render_engine:-gazebo-default}"
 endef
 
 .venv/bin/python:
@@ -164,14 +177,23 @@ endef
 check-env: ## Check that root .env exists.
 	@test -f .env || (echo "Missing .env. Copy .env.example to .env and fill values first."; exit 1)
 
+check-node: ## Check the local Node.js toolchain required by the frontend.
+	@command -v node >/dev/null 2>&1 || (echo "Missing node. Install Node.js 18.18 or newer."; exit 1)
+	@command -v npm >/dev/null 2>&1 || (echo "Missing npm. Install npm 9 or newer."; exit 1)
+
 install-backend: .venv/bin/python ## Install Python backend dependencies.
 	$(PIP) install -r requirements.txt
 
-install-frontend: ## Install frontend dependencies.
+install-frontend: check-node ## Install frontend dependencies.
 	cd web_frontend && npm ci
 
 db-tunnel: ## Open SSH tunnel to the shared PostgreSQL server.
-	ssh -N -L $(LOCAL_DB_PORT):127.0.0.1:$(REMOTE_DB_PORT) $(GPU_USER)@$(GPU_HOST)
+	ssh -N -T \
+		-o ExitOnForwardFailure=yes \
+		-o ServerAliveInterval=30 \
+		-o ServerAliveCountMax=3 \
+		-L 127.0.0.1:$(LOCAL_DB_PORT):127.0.0.1:$(REMOTE_DB_PORT) \
+		$(GPU_USER)@$(GPU_HOST)
 
 init-db: check-env ## Create backend database tables.
 	$(PYTHON) -m web_backend.db.init_db
@@ -182,7 +204,7 @@ register-user: check-env ## Sync initial admin user from .env.
 backend: check-env ## Run FastAPI backend.
 	$(PYTHON) -m uvicorn web_backend.main:app --reload --host $(BACKEND_HOST) --port $(BACKEND_PORT)
 
-frontend: ## Run Vite frontend.
+frontend: check-node ## Run Vite frontend.
 	cd web_frontend && npm run dev
 
 ros-build: ## Build ROS2 workspace locally.
@@ -201,16 +223,36 @@ gazebo: ## Run Gazebo without the camera-specific launch.
 	export $(GAZEBO_ENV); \
 	source $(ROS_SETUP); \
 	source install/setup.bash; \
+	render_engine_arg=""; \
+	if [ -n "$$GAZEBO_SELECTED_RENDER_ENGINE" ]; then \
+		render_engine_arg="render_engine:=$$GAZEBO_SELECTED_RENDER_ENGINE"; \
+	fi; \
+	gui_render_engine_arg=""; \
+	if [ -n "$$GAZEBO_SELECTED_GUI_RENDER_ENGINE" ]; then \
+		gui_render_engine_arg="gui_render_engine:=$$GAZEBO_SELECTED_GUI_RENDER_ENGINE"; \
+	fi; \
 	ros2 launch robot_system_description gazebo.launch.py \
-		stack_count:=$(STACK_COUNT) render_engine:="$$GAZEBO_SELECTED_RENDER_ENGINE"
+		stack_count:=$(STACK_COUNT) \
+		split_gui_software:="$$GAZEBO_SPLIT_GUI_SOFTWARE" \
+		$$render_engine_arg $$gui_render_engine_arg
 
 gazebo-camera: ## Run Gazebo with camera topics for vision alignment.
 	@$(call configure_gazebo_rendering); \
 	export $(GAZEBO_ENV); \
 	source $(ROS_SETUP); \
 	source install/setup.bash; \
+	render_engine_arg=""; \
+	if [ -n "$$GAZEBO_SELECTED_RENDER_ENGINE" ]; then \
+		render_engine_arg="render_engine:=$$GAZEBO_SELECTED_RENDER_ENGINE"; \
+	fi; \
+	gui_render_engine_arg=""; \
+	if [ -n "$$GAZEBO_SELECTED_GUI_RENDER_ENGINE" ]; then \
+		gui_render_engine_arg="gui_render_engine:=$$GAZEBO_SELECTED_GUI_RENDER_ENGINE"; \
+	fi; \
 	ros2 launch robot_system_description gazebo_camera.launch.py \
-		stack_count:=$(STACK_COUNT) render_engine:="$$GAZEBO_SELECTED_RENDER_ENGINE"
+		stack_count:=$(STACK_COUNT) \
+		split_gui_software:="$$GAZEBO_SPLIT_GUI_SOFTWARE" \
+		$$render_engine_arg $$gui_render_engine_arg
 
 joint-bridge: ## Run local joint command bridge.
 	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core joint_bridge.launch.py stack_count:=$(STACK_COUNT)

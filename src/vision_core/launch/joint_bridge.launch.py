@@ -4,10 +4,17 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+MIN_STACK_COUNT = 2
+MAX_STACK_COUNT = 16
+
+
 def launch_setup(context):
     stack_count = int(LaunchConfiguration("stack_count").perform(context))
-    if stack_count < 1 or stack_count > 16:
-        raise RuntimeError(f"stack_count must be between 1 and 16: {stack_count}")
+    if not MIN_STACK_COUNT <= stack_count <= MAX_STACK_COUNT:
+        raise RuntimeError(
+            f"stack_count must be between {MIN_STACK_COUNT} and "
+            f"{MAX_STACK_COUNT}: {stack_count}"
+        )
     chip_models = tuple(
         "check_chip" if chip_index == 1 else f"check_chip_{chip_index}"
         for chip_index in range(1, stack_count + 1)
@@ -65,7 +72,6 @@ def launch_setup(context):
                 "theta_tolerance": 0.00015,
                 "feedback_stale_timeout": 1.0,
                 "settle_samples": 5,
-                "stack_count": stack_count,
             }],
             output="screen",
         ),

@@ -1,7 +1,9 @@
 import { create } from "zustand";
 
 import { getStoredApiBase, robotLogApi } from "../api/api.js";
-import { formatHourBucket, formatTimeLabel, timestampOf } from "../utils/format.js";
+import { formatHourBucket } from "../utils/format.js";
+
+let dashboardRefreshPromise = null;
 
 function groupBy(items, keySelector) {
   return items.reduce((acc, item) => {
@@ -42,38 +44,6 @@ function buildTimeline(work, errors, align) {
   return Object.values(grouped).sort((a, b) => a.time.localeCompare(b.time));
 }
 
-function buildAlignmentConvergence(align) {
-  return [...align]
-    .sort((a, b) => {
-      const aTime = timestampOf(a.created_at);
-      const bTime = timestampOf(b.created_at);
-      if (aTime !== bTime) return aTime - bTime;
-      return (a.align_id || 0) - (b.align_id || 0);
-    })
-    .map((item) => ({
-      time: formatTimeLabel(item.created_at),
-      dx: Number(item.offset_x || 0),
-      dy: Number(item.offset_y || 0),
-      dtheta: Number(item.offset_theta || 0),
-      process_step: item.process_step,
-      camera_type: item.camera_type,
-      history_id: item.history_id,
-    }));
-}
-
-function symmetricDomain(rows) {
-  const maxAbs = rows.reduce((currentMax, row) => {
-    return Math.max(
-      currentMax,
-      Math.abs(row.dx || 0),
-      Math.abs(row.dy || 0),
-      Math.abs(row.dtheta || 0),
-    );
-  }, 0);
-  const padded = Math.max(maxAbs * 1.15, 1);
-  return [-padded, padded];
-}
-
 export const useRobotLogStore = create((set, get) => ({
   apiBase: getStoredApiBase(),
   work: [],
@@ -84,26 +54,39 @@ export const useRobotLogStore = create((set, get) => ({
   unauthorized: false,
   lastUpdated: null,
 
-  async refreshDashboard() {
-    set({ loading: true, error: null, unauthorized: false });
-    try {
-      const apiBase = get().apiBase;
-      const { work, errors, align } = await robotLogApi.getDashboardData(apiBase);
-      set({
-        work,
-        errors,
-        align,
-        loading: false,
-        lastUpdated: new Date().toISOString(),
-      });
-    } catch (error) {
-      const unauthorized =
-        error.message.includes("인증") ||
-        error.message.includes("token") ||
-        error.message.includes("Token") ||
-        error.message.includes("401");
-      set({ error: error.message, loading: false, unauthorized });
+  async refreshDashboard({ background = false } = {}) {
+    if (dashboardRefreshPromise) return dashboardRefreshPromise;
+
+    if (!background) {
+      set({ loading: true, error: null, unauthorized: false });
     }
+
+    dashboardRefreshPromise = (async () => {
+      try {
+        const apiBase = get().apiBase;
+        const { work, errors, align } = await robotLogApi.getDashboardData(apiBase);
+        set({
+          work,
+          errors,
+          align,
+          error: null,
+          unauthorized: false,
+          lastUpdated: new Date().toISOString(),
+        });
+      } catch (error) {
+        const unauthorized =
+          error.message.includes("인증") ||
+          error.message.includes("token") ||
+          error.message.includes("Token") ||
+          error.message.includes("401");
+        set({ error: error.message, unauthorized });
+      } finally {
+        dashboardRefreshPromise = null;
+        if (!background) set({ loading: false });
+      }
+    })();
+
+    return dashboardRefreshPromise;
   },
 
   getMetrics() {
@@ -120,10 +103,7 @@ export const useRobotLogStore = create((set, get) => ({
 
   getCharts() {
     const { work, errors, align } = get();
-    const alignmentConvergence = buildAlignmentConvergence(align);
     return {
-      alignmentConvergence,
-      alignmentDomain: symmetricDomain(alignmentConvergence),
       timeline: buildTimeline(work, errors, align),
       errorFrequency: toChartRows(groupBy(errors, (item) => item.error_level || "UNKNOWN")),
       statusDistribution: toChartRows(groupBy(work, (item) => item.status || "UNKNOWN")),

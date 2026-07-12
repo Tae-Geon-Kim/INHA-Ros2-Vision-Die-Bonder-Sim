@@ -1,22 +1,35 @@
 import asyncio
+import logging
 import os
 import re
 import shlex
 import signal
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from web_backend.schemas.common_schemas import CommonResponse
+from web_backend.schemas.robot_log_schemas import (
+    RobotErrorLogCreate,
+    WorkHistoryCreate,
+    WorkHistoryUpdate,
+)
 from web_backend.schemas.robot_control_schemas import (
     DEFAULT_STACK_COUNT,
     DemoStartRequest,
 )
+from web_backend.services.robot_log_services import (
+    create_robot_error_log_service,
+    create_work_history_service,
+    update_work_history_service,
+)
 
 
 router = APIRouter()
+LOGGER = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_DIR = PROJECT_ROOT / "log"
@@ -37,6 +50,8 @@ _gazebo_process: subprocess.Popen | None = None
 _joint_bridge_process: subprocess.Popen | None = None
 _demo_process: subprocess.Popen | None = None
 _demo_stack_count = DEFAULT_STACK_COUNT
+_demo_history_id: int | None = None
+_demo_monitor_task: asyncio.Task | None = None
 _process_lock = asyncio.Lock()
 
 
@@ -123,6 +138,7 @@ def _process_snapshot() -> dict:
         "returncode": demo["returncode"],
         "command": demo["command"],
         "stack_count": _demo_stack_count,
+        "history_id": _demo_history_id,
         "infrastructure_running": (
             gazebo["running"] and joint_bridge["running"]
         ),
@@ -139,10 +155,15 @@ def _process_snapshot() -> dict:
     }
 
 
-def _process_environment(stack_count: int) -> dict[str, str]:
+def _process_environment(
+    stack_count: int,
+    history_id: int | None = None,
+) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(GAZEBO_TRANSPORT_ENV)
     environment["STACK_COUNT"] = str(stack_count)
+    if history_id is not None:
+        environment["HISTORY_ID"] = str(history_id)
     return environment
 
 
@@ -150,6 +171,7 @@ def _spawn_process(
     command_text: str,
     log_name: str,
     stack_count: int,
+    history_id: int | None = None,
 ) -> subprocess.Popen:
     command = _command_argv(command_text, stack_count)
 
@@ -162,7 +184,7 @@ def _spawn_process(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
-            env=_process_environment(stack_count),
+            env=_process_environment(stack_count, history_id),
         )
 
 
@@ -237,6 +259,127 @@ def _stop_all_processes_sync() -> None:
     _demo_process = None
     _joint_bridge_process = None
     _gazebo_process = None
+
+
+def _stop_infrastructure_sync() -> None:
+    global _gazebo_process, _joint_bridge_process
+
+    _terminate_process(_joint_bridge_process)
+    _terminate_process(_gazebo_process)
+    _joint_bridge_process = None
+    _gazebo_process = None
+
+
+def _generated_die_serial(stack_count: int) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return f"HBM-{stack_count}L-{timestamp}"
+
+
+async def _create_managed_history(
+    db_pool,
+    stack_count: int,
+    die_serial_number: str | None,
+) -> dict:
+    serial_number = die_serial_number or _generated_die_serial(stack_count)
+    async with db_pool.acquire() as conn:
+        return await create_work_history_service(
+            conn,
+            WorkHistoryCreate(
+                die_serial_number=serial_number,
+                stack_count=stack_count,
+                status="RUNNING",
+            ),
+        )
+
+
+async def _finalize_managed_history(
+    db_pool,
+    history_id: int,
+    work_status: str,
+    error_detail: str | None = None,
+) -> None:
+    async with db_pool.acquire() as conn:
+        await update_work_history_service(
+            conn,
+            history_id,
+            WorkHistoryUpdate(status=work_status),
+        )
+        if error_detail:
+            await create_robot_error_log_service(
+                conn,
+                RobotErrorLogCreate(
+                    error_level="ERROR",
+                    error_code="VISION_STACK_DEMO_EXIT",
+                    detail=error_detail,
+                    history_id=history_id,
+                ),
+            )
+
+
+async def _cancel_demo_monitor() -> None:
+    global _demo_monitor_task
+
+    task = _demo_monitor_task
+    _demo_monitor_task = None
+    if task is None or task.done() or task is asyncio.current_task():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def _monitor_demo_completion(
+    process: subprocess.Popen,
+    history_id: int,
+    db_pool,
+) -> None:
+    global _demo_history_id, _demo_monitor_task
+
+    try:
+        returncode = await asyncio.to_thread(process.wait)
+    except asyncio.CancelledError:
+        return
+
+    async with _process_lock:
+        if process is not _demo_process or history_id != _demo_history_id:
+            return
+
+        work_status = "DONE" if returncode == 0 else "FAIL"
+        error_detail = None
+        if returncode != 0:
+            error_detail = (
+                f"vision-stack-demo가 returncode={returncode}로 종료되었습니다. "
+                f"로그: {LOG_DIR / 'robot_demo.log'}"
+            )
+        try:
+            await _finalize_managed_history(
+                db_pool,
+                history_id,
+                work_status,
+                error_detail=error_detail,
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("failed to finalize managed work history")
+
+        await asyncio.to_thread(_stop_infrastructure_sync)
+        _demo_history_id = None
+        if _demo_monitor_task is asyncio.current_task():
+            _demo_monitor_task = None
+
+
+def _schedule_demo_monitor(
+    process: subprocess.Popen,
+    history_id: int,
+    db_pool,
+) -> None:
+    global _demo_monitor_task
+
+    _demo_monitor_task = asyncio.create_task(
+        _monitor_demo_completion(process, history_id, db_pool),
+        name=f"vision-stack-demo-{history_id}",
+    )
 
 
 def _manual_simulator_running() -> bool:
@@ -342,11 +485,25 @@ async def _wait_for_joint_bridge() -> None:
         raise RuntimeError("joint bridge 프로세스가 준비 중 종료되었습니다.")
 
 
-async def shutdown_managed_demo() -> None:
+async def shutdown_managed_demo(db_pool=None) -> None:
     """Stop every process started through the web API."""
 
+    global _demo_history_id
+
     async with _process_lock:
+        history_id = _demo_history_id
+        await _cancel_demo_monitor()
         await asyncio.to_thread(_stop_all_processes_sync)
+        _demo_history_id = None
+        if db_pool is not None and history_id is not None:
+            try:
+                await _finalize_managed_history(
+                    db_pool,
+                    history_id,
+                    "STOP",
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("failed to stop managed work history")
 
 
 @router.get(
@@ -369,13 +526,23 @@ async def get_demo_status():
         "vision-stack-demo를 같은 값으로 순서대로 실행합니다."
     ),
 )
-async def start_demo(data: DemoStartRequest | None = None):
+async def start_demo(
+    request: Request,
+    data: DemoStartRequest | None = None,
+):
     global _gazebo_process, _joint_bridge_process, _demo_process
-    global _demo_stack_count
+    global _demo_history_id, _demo_stack_count
 
     requested_stack_count = (
         data.stack_count if data is not None else DEFAULT_STACK_COUNT
     )
+    die_serial_number = data.die_serial_number if data is not None else None
+    db_pool = request.app.state.db_pool
+    if db_pool is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="DB pool이 초기화되지 않았습니다.",
+        )
 
     async with _process_lock:
         snapshot = _process_snapshot()
@@ -392,32 +559,52 @@ async def start_demo(data: DemoStartRequest | None = None):
                 data=snapshot,
             )
 
-        try:
-            # A completed/failed demo leaves moved chips in Gazebo. Recreate
-            # the whole world for every non-idempotent Start so the requested
-            # run always begins from its declared spawn layout.
-            await asyncio.to_thread(_stop_all_processes_sync)
-            if _manual_simulator_running():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "터미널에서 실행한 Gazebo 또는 ROS 데모가 "
-                        "감지되었습니다. 기존 프로세스를 Ctrl+C로 종료한 "
-                        "뒤 Start를 다시 누르세요."
-                    ),
+        previous_history_id = _demo_history_id
+        await _cancel_demo_monitor()
+        await asyncio.to_thread(_stop_all_processes_sync)
+        _demo_history_id = None
+        if previous_history_id is not None:
+            try:
+                await _finalize_managed_history(
+                    db_pool,
+                    previous_history_id,
+                    "STOP",
                 )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("failed to stop previous managed work history")
 
+        if _manual_simulator_running():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "터미널에서 실행한 Gazebo 또는 ROS 데모가 "
+                    "감지되었습니다. 기존 프로세스를 Ctrl+C로 종료한 "
+                    "뒤 Start를 다시 누르세요."
+                ),
+            )
+
+        history_id = None
+        try:
+            history = await _create_managed_history(
+                db_pool,
+                requested_stack_count,
+                die_serial_number,
+            )
+            history_id = int(history["history_id"])
+            _demo_history_id = history_id
             _demo_stack_count = requested_stack_count
             _gazebo_process = _spawn_process(
                 _gazebo_command(),
                 "web_gazebo.log",
                 requested_stack_count,
+                history_id,
             )
             await _wait_for_gazebo(requested_stack_count)
             _joint_bridge_process = _spawn_process(
                 _joint_bridge_command(),
                 "web_joint_bridge.log",
                 requested_stack_count,
+                history_id,
             )
             await _wait_for_joint_bridge()
 
@@ -425,17 +612,41 @@ async def start_demo(data: DemoStartRequest | None = None):
                 _demo_command(),
                 "robot_demo.log",
                 requested_stack_count,
+                history_id,
             )
             await asyncio.sleep(0.3)
             if not _is_running(_demo_process):
                 raise RuntimeError("비전 적층 데모 프로세스가 즉시 종료되었습니다.")
+            _schedule_demo_monitor(
+                _demo_process,
+                history_id,
+                db_pool,
+            )
         except asyncio.CancelledError:
+            await _cancel_demo_monitor()
             await asyncio.to_thread(_stop_all_processes_sync)
+            if history_id is not None:
+                await _finalize_managed_history(
+                    db_pool,
+                    history_id,
+                    "STOP",
+                )
+            _demo_history_id = None
             raise
-        except HTTPException:
-            raise
-        except (FileNotFoundError, OSError, ValueError, RuntimeError) as exc:
+        except Exception as exc:  # noqa: BLE001
+            await _cancel_demo_monitor()
             await asyncio.to_thread(_stop_all_processes_sync)
+            if history_id is not None:
+                try:
+                    await _finalize_managed_history(
+                        db_pool,
+                        history_id,
+                        "FAIL",
+                        error_detail=f"비전 적층 시스템 시작 실패: {exc}",
+                    )
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception("failed to record demo startup failure")
+            _demo_history_id = None
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=(
@@ -459,16 +670,31 @@ async def start_demo(data: DemoStartRequest | None = None):
     status_code=status.HTTP_200_OK,
     summary="[로봇 제어] 비전 적층 시스템 전체 중지",
 )
-async def stop_demo():
+async def stop_demo(request: Request):
+    global _demo_history_id
+
+    db_pool = request.app.state.db_pool
     async with _process_lock:
         snapshot = _process_snapshot()
-        if not _any_process_running():
+        history_id = _demo_history_id
+        if not _any_process_running() and history_id is None:
             return CommonResponse(
                 message="웹에서 실행한 비전 적층 시스템이 없습니다.",
                 data=snapshot,
             )
 
+        await _cancel_demo_monitor()
         await asyncio.to_thread(_stop_all_processes_sync)
+        _demo_history_id = None
+        if db_pool is not None and history_id is not None:
+            try:
+                await _finalize_managed_history(
+                    db_pool,
+                    history_id,
+                    "STOP",
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("failed to stop managed work history")
         return CommonResponse(
             message="Gazebo, joint bridge, 비전 적층 데모를 모두 중지했습니다.",
             data=_process_snapshot(),

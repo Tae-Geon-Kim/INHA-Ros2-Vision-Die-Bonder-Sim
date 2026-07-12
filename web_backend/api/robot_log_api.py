@@ -150,12 +150,20 @@ async def get_robot_error_logs(
     description="PICK/PLACE 단계의 카메라 보정 offset 값을 저장합니다.",
 )
 async def create_vision_align_log(
-    data: VisionAlignLogCreate,
+    data: VisionAlignLogCreate | list[VisionAlignLogCreate],
     conn: Connection = Depends(get_db),
 ):
-    result = await create_vision_align_log_service(conn, data)
+    is_batch = isinstance(data, list)
+    entries = data if is_batch else [data]
+    result = [
+        await create_vision_align_log_service(conn, entry)
+        for entry in entries
+    ]
 
-    return CommonResponse(message="비전 정렬 로그가 저장되었습니다.", data=result)
+    return CommonResponse(
+        message=f"비전 정렬 로그 {len(result)}건이 저장되었습니다.",
+        data=result if is_batch else result[0],
+    )
 
 
 @router.get(
@@ -166,7 +174,7 @@ async def create_vision_align_log(
     description="웹 화면에서 비전 정렬 로그를 최신순으로 조회합니다.",
 )
 async def get_vision_align_logs(
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     history_id: int | None = Query(default=None, ge=1),
     process_step: ProcessStep | None = Query(default=None),
