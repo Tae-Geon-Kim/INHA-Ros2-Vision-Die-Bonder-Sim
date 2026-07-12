@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import json
 import math
 import os
@@ -7,6 +8,8 @@ import re
 import statistics
 import subprocess
 import time
+import urllib.error
+import urllib.request
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -541,6 +544,10 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_VISION_RESULT_TOPIC",
             "/vision/alignment_result",
         )
+        self.PLACE_COMPLETION_URL = os.environ.get(
+            "ROBOT_CONTROL_PLACE_COMPLETION_URL",
+            "",
+        ).strip()
         self.VISION_REQUEST_TIMEOUT_SEC = float(os.environ.get(
             "ROBOT_CONTROL_VISION_REQUEST_TIMEOUT_SEC",
             "20.0",
@@ -3301,6 +3308,37 @@ class MainControllerNode(Node):
         )
         self.wait_for_vision_motion(minimum_settle_sec=settle_sec)
 
+    def report_place_alignment_completion(self, chip_index):
+        if not self.PLACE_COMPLETION_URL:
+            return True
+
+        request = urllib.request.Request(
+            self.PLACE_COMPLETION_URL,
+            data=json.dumps({
+                'chip_index': int(chip_index),
+                'completed_at': datetime.now().astimezone().isoformat(),
+            }).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(request, timeout=1.0) as response:
+                    response.read()
+                self.get_logger().info(
+                    f'chip {int(chip_index)} place 비전 정렬 완료 시각을 '
+                    'backend에 기록했습니다.'
+                )
+                return True
+            except (urllib.error.URLError, TimeoutError) as exc:
+                if attempt == 0:
+                    time.sleep(0.2)
+                    continue
+                self.get_logger().warn(
+                    f'chip {int(chip_index)} place 비전 정렬 완료 기록 실패: {exc}'
+                )
+        return False
+
     def run_vision_pick_place_demo(
         self,
         pick_x=500.0,
@@ -3517,6 +3555,7 @@ class MainControllerNode(Node):
         aligned_place_x = self.last_sent_x
         aligned_place_y = self.last_sent_y
         aligned_place_theta = self.last_sent_theta_deg
+        self.report_place_alignment_completion(self.active_stack_level + 1)
 
         self.get_logger().info(
             '8/11 정렬된 위치에서 적층 접촉까지 단계 하강: '
@@ -3546,7 +3585,6 @@ class MainControllerNode(Node):
         ):
             self.recover_vision_demo(True, settle_sec=settle_sec)
             return False
-        time.sleep(0.3)
 
         step_10_description = (
             'substrate 위에서 기준 정렬 높이로 상승 후 배치 오차 측정'

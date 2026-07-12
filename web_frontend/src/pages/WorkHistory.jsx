@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ClipboardList, RefreshCw, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ClipboardList, Search } from "lucide-react";
 
 import MetricCard from "../components/cards/MetricCard.jsx";
-import PageHeader from "../components/layout/PageHeader.jsx";
+import PageHeader, { ServerStatus } from "../components/layout/PageHeader.jsx";
 import StatusBadge from "../components/logs/StatusBadge.jsx";
 import { robotLogApi } from "../api/api.js";
 import { formatDate, formatDuration } from "../utils/format.js";
@@ -15,10 +15,15 @@ export default function WorkHistory() {
   const [filters, setFilters] = useState({ status: "", die_serial_number: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const loadInFlight = useRef(false);
 
-  const loadWorkHistory = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadWorkHistory = useCallback(async ({ background = false } = {}) => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const response = await robotLogApi.listWorkHistories({
         limit: 100,
@@ -28,15 +33,22 @@ export default function WorkHistory() {
       });
       setItems(response?.data?.items || []);
       setTotal(response?.data?.total || 0);
+      setError(null);
     } catch (requestError) {
       setError(requestError.message || "작업 이력을 불러오지 못했습니다.");
     } finally {
-      setLoading(false);
+      loadInFlight.current = false;
+      if (!background) setLoading(false);
     }
   }, [filters]);
 
   useEffect(() => {
     loadWorkHistory();
+    const timer = window.setInterval(
+      () => loadWorkHistory({ background: true }),
+      3000,
+    );
+    return () => window.clearInterval(timer);
   }, [loadWorkHistory]);
 
   const metrics = useMemo(() => {
@@ -55,17 +67,7 @@ export default function WorkHistory() {
         eyebrow="Robot Logs"
         title="Work History"
         description="다이 본딩 작업 시작, 진행, 종료 상태를 최신순으로 추적합니다."
-        actions={
-          <button
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
-            onClick={loadWorkHistory}
-            type="button"
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </button>
-        }
+        actions={<ServerStatus />}
       />
 
       {error ? (
@@ -104,7 +106,7 @@ export default function WorkHistory() {
           </label>
           <button
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-bold text-ink disabled:opacity-60"
-            onClick={loadWorkHistory}
+            onClick={() => loadWorkHistory()}
             type="button"
             disabled={loading}
           >

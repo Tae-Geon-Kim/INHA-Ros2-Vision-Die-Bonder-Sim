@@ -21,6 +21,7 @@ export async function request(path, options = {}) {
     credentials: "include",
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
   });
 
   const payload = await response.json().catch(() => null);
@@ -86,6 +87,12 @@ export const robotControlApi = {
 
   getDemoStatus() {
     return request("/robot-control/demo/status");
+  },
+};
+
+export const systemApi = {
+  getHealth(signal) {
+    return request("/health", { signal });
   },
 };
 

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Hash, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Hash } from "lucide-react";
 
 import MetricCard from "../components/cards/MetricCard.jsx";
-import PageHeader from "../components/layout/PageHeader.jsx";
+import PageHeader, { ServerStatus } from "../components/layout/PageHeader.jsx";
 import StatusBadge from "../components/logs/StatusBadge.jsx";
 import { robotLogApi } from "../api/api.js";
 import { formatPreciseDate } from "../utils/format.js";
@@ -15,10 +15,15 @@ export default function ErrorLogs() {
   const [filters, setFilters] = useState({ error_level: "", history_id: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const loadInFlight = useRef(false);
 
-  const loadErrorLogs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadErrorLogs = useCallback(async ({ background = false } = {}) => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const response = await robotLogApi.listErrorLogs({
         limit: 100,
@@ -28,15 +33,22 @@ export default function ErrorLogs() {
       });
       setItems(response?.data?.items || []);
       setTotal(response?.data?.total || 0);
+      setError(null);
     } catch (requestError) {
       setError(requestError.message || "에러 로그를 불러오지 못했습니다.");
     } finally {
-      setLoading(false);
+      loadInFlight.current = false;
+      if (!background) setLoading(false);
     }
   }, [filters]);
 
   useEffect(() => {
     loadErrorLogs();
+    const timer = window.setInterval(
+      () => loadErrorLogs({ background: true }),
+      3000,
+    );
+    return () => window.clearInterval(timer);
   }, [loadErrorLogs]);
 
   const metrics = useMemo(() => ({
@@ -52,17 +64,7 @@ export default function ErrorLogs() {
         eyebrow="Robot Logs"
         title="Error Logs"
         description="로봇 제어 중 발생한 경고, 에러, 치명 로그를 확인합니다."
-        actions={
-          <button
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
-            onClick={loadErrorLogs}
-            type="button"
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </button>
-        }
+        actions={<ServerStatus />}
       />
 
       {error ? (
@@ -102,7 +104,7 @@ export default function ErrorLogs() {
           </label>
           <button
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-bold text-ink disabled:opacity-60"
-            onClick={loadErrorLogs}
+            onClick={() => loadErrorLogs()}
             type="button"
             disabled={loading}
           >

@@ -164,6 +164,14 @@ def _process_environment(
     environment["STACK_COUNT"] = str(stack_count)
     if history_id is not None:
         environment["HISTORY_ID"] = str(history_id)
+        backend_base_url = os.environ.get(
+            "ROBOT_BACKEND_BASE_URL",
+            "http://127.0.0.1:8000",
+        ).rstrip("/")
+        environment["ROBOT_CONTROL_PLACE_COMPLETION_URL"] = (
+            f"{backend_base_url}/robot-logs/work-history/"
+            f"{history_id}/place-complete"
+        )
     return environment
 
 
