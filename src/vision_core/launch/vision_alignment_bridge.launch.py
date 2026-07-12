@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.conditions import UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -24,6 +25,7 @@ def generate_launch_description():
     initial_x_mm = LaunchConfiguration("initial_x_mm")
     initial_y_mm = LaunchConfiguration("initial_y_mm")
     request_only = LaunchConfiguration("request_only")
+    direct_gz_images = LaunchConfiguration("direct_gz_images")
     request_topic = LaunchConfiguration("request_topic")
     result_topic = LaunchConfiguration("result_topic")
     request_timeout_sec = LaunchConfiguration("request_timeout_sec")
@@ -36,6 +38,7 @@ def generate_launch_description():
     macro_axis_sign_y = LaunchConfiguration("macro_axis_sign_y")
     micro_axis_sign_x = LaunchConfiguration("micro_axis_sign_x")
     micro_axis_sign_y = LaunchConfiguration("micro_axis_sign_y")
+    opencv_threads = LaunchConfiguration("opencv_threads")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -87,6 +90,11 @@ def generate_launch_description():
             "request_only",
             default_value="false",
             description="Only process explicit capture/alignment requests.",
+        ),
+        DeclareLaunchArgument(
+            "direct_gz_images",
+            default_value="false",
+            description="Read Gazebo image topics directly without ROS image conversion.",
         ),
         DeclareLaunchArgument(
             "request_topic",
@@ -148,6 +156,11 @@ def generate_launch_description():
             default_value="1.0",
             description="Micro image Y to robot Y axis sign.",
         ),
+        DeclareLaunchArgument(
+            "opencv_threads",
+            default_value="2",
+            description="OpenCV worker threads used by each registration task.",
+        ),
         SetEnvironmentVariable(name="IGN_IP", value="127.0.0.1"),
         SetEnvironmentVariable(name="GZ_IP", value="127.0.0.1"),
         SetEnvironmentVariable(name="IGN_PARTITION", value="inha_die_bonder"),
@@ -157,6 +170,7 @@ def generate_launch_description():
             executable="parameter_bridge",
             name="vision_camera_image_bridge",
             arguments=IMAGE_BRIDGE_ARGS,
+            condition=UnlessCondition(direct_gz_images),
             output="screen",
         ),
         Node(
@@ -174,6 +188,7 @@ def generate_launch_description():
                 "initial_x_mm": initial_x_mm,
                 "initial_y_mm": initial_y_mm,
                 "request_only": request_only,
+                "direct_gz_images": direct_gz_images,
                 "request_topic": request_topic,
                 "result_topic": result_topic,
                 "request_timeout_sec": request_timeout_sec,
@@ -186,6 +201,7 @@ def generate_launch_description():
                 "macro_axis_sign_y": macro_axis_sign_y,
                 "micro_axis_sign_x": micro_axis_sign_x,
                 "micro_axis_sign_y": micro_axis_sign_y,
+                "opencv_threads": opencv_threads,
             }],
             output="screen",
         ),
