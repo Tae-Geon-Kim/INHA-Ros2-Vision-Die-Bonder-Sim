@@ -37,6 +37,48 @@ DEFAULT_STATE = {
     "chip_z": 0.0,
     "chip_theta_deg": 0.0,
 }
+MIN_STACK_COUNT = 4
+MAX_STACK_COUNT = 16
+
+
+def validate_stack_count(value):
+    try:
+        stack_count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'stack_count는 정수여야 합니다: {value}') from exc
+    if not MIN_STACK_COUNT <= stack_count <= MAX_STACK_COUNT:
+        raise ValueError(
+            f'stack_count는 {MIN_STACK_COUNT}~{MAX_STACK_COUNT} 범위여야 합니다: '
+            f'{stack_count}'
+        )
+    return stack_count
+
+
+def stack_count_arg(value):
+    try:
+        return validate_stack_count(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def chip_model_name(layer_number):
+    return 'check_chip' if layer_number == 1 else f'check_chip_{layer_number}'
+
+
+def chip_pick_specs():
+    """Return default pick poses in mm/deg, preserving the original first two."""
+    specs = [
+        (500.0, 400.0, 0.0),
+        (500.0, 0.0, 30.0),
+    ]
+    for x_mm in (500.0, 400.0, 300.0, 200.0):
+        for y_mm in (400.0, 200.0, 0.0, -200.0, -400.0):
+            if any((x_mm, y_mm) == spec[:2] for spec in specs):
+                continue
+            specs.append((x_mm, y_mm, 0.0))
+            if len(specs) == MAX_STACK_COUNT:
+                return specs
+    return specs
 
 
 def load_state():
@@ -121,11 +163,26 @@ def env_flag(name, default=False):
 
 
 class MainControllerNode(Node):
-    def __init__(self):
+    def __init__(self, stack_count=None):
         super().__init__('main_controller_node')
+
+        configured_stack_count = (
+            os.environ.get(
+                'ROBOT_CONTROL_STACK_COUNT',
+                os.environ.get('STACK_COUNT', MIN_STACK_COUNT),
+            )
+            if stack_count is None
+            else stack_count
+        )
+        self.STACK_COUNT = validate_stack_count(configured_stack_count)
 
         # 로봇 하드웨어 명령 퍼블리셔 (Command topic: /robot/command_pose)
         self.cmd_pub = self.create_publisher(Pose, '/robot/command_pose', 10)
+        self.active_stack_pair_pub = self.create_publisher(
+            String,
+            '/robot/active_stack_pair',
+            10,
+        )
         
         # 그리퍼 중심점 기준 카메라의 상대 위치 오프셋
         self.GRIPPER_TO_CAMERA_DX = 50.0  
@@ -234,10 +291,17 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_SECOND_CHIP_MODEL",
             "check_chip_2",
         )
-        self.CHIP_MODELS = (
-            self.PRIMARY_CHIP_MODEL,
-            self.SECOND_CHIP_MODEL,
+        chip_models = [self.PRIMARY_CHIP_MODEL, self.SECOND_CHIP_MODEL]
+        chip_models.extend(
+            os.environ.get(
+                f"ROBOT_CONTROL_CHIP_{index}_MODEL",
+                chip_model_name(index),
+            )
+            for index in range(3, self.STACK_COUNT + 1)
         )
+        if len(set(chip_models)) != len(chip_models):
+            raise ValueError(f"chip model 이름은 서로 달라야 합니다: {chip_models}")
+        self.CHIP_MODELS = tuple(chip_models)
         self.RED_CHIP_MODEL = self.PRIMARY_CHIP_MODEL
         self.USE_DETACHABLE_JOINT = env_flag("ROBOT_CONTROL_USE_DETACHABLE_JOINT", True)
         self.REQUIRE_PICKER_CONTACT = env_flag("ROBOT_CONTROL_REQUIRE_PICKER_CONTACT", True)
@@ -257,48 +321,83 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_SUBSTRATE_DETACH_TOPIC",
             "/model/robot_system/substrate_bond/detach",
         )
-        self.VACUUM_JOINT_TOPICS = {
-            self.PRIMARY_CHIP_MODEL: {
-                "attach": primary_attach_topic,
-                "detach": primary_detach_topic,
-                "state": "/model/robot_system/vacuum/state",
-            },
-            self.SECOND_CHIP_MODEL: {
-                "attach": os.environ.get(
-                    "ROBOT_CONTROL_SECOND_ATTACH_TOPIC",
-                    "/model/robot_system/vacuum_2/attach",
-                ),
-                "detach": os.environ.get(
-                    "ROBOT_CONTROL_SECOND_DETACH_TOPIC",
-                    "/model/robot_system/vacuum_2/detach",
-                ),
-                "state": os.environ.get(
-                    "ROBOT_CONTROL_SECOND_VACUUM_STATE_TOPIC",
-                    "/model/robot_system/vacuum_2/state",
-                ),
-            },
-        }
-        self.STACK_BOND_TOPICS = {
-            self.PRIMARY_CHIP_MODEL: {
-                "attach": primary_bond_attach_topic,
-                "detach": primary_bond_detach_topic,
-                "state": "/model/robot_system/substrate_bond/state",
-            },
-            self.SECOND_CHIP_MODEL: {
-                "attach": os.environ.get(
-                    "ROBOT_CONTROL_SECOND_BOND_ATTACH_TOPIC",
-                    "/model/robot_system/stack_bond_2/attach",
-                ),
-                "detach": os.environ.get(
-                    "ROBOT_CONTROL_SECOND_BOND_DETACH_TOPIC",
-                    "/model/robot_system/stack_bond_2/detach",
-                ),
-                "state": os.environ.get(
-                    "ROBOT_CONTROL_SECOND_BOND_STATE_TOPIC",
-                    "/model/robot_system/stack_bond_2/state",
-                ),
-            },
-        }
+        self.VACUUM_JOINT_TOPICS = {}
+        self.STACK_BOND_TOPICS = {}
+        for index, model_name in enumerate(self.CHIP_MODELS, start=1):
+            if index == 1:
+                vacuum_topics = {
+                    "attach": primary_attach_topic,
+                    "detach": primary_detach_topic,
+                    "state": "/model/robot_system/vacuum/state",
+                }
+                bond_topics = {
+                    "attach": primary_bond_attach_topic,
+                    "detach": primary_bond_detach_topic,
+                    "state": "/model/robot_system/substrate_bond/state",
+                }
+            elif index == 2:
+                vacuum_topics = {
+                    "attach": os.environ.get(
+                        "ROBOT_CONTROL_SECOND_ATTACH_TOPIC",
+                        "/model/robot_system/vacuum_2/attach",
+                    ),
+                    "detach": os.environ.get(
+                        "ROBOT_CONTROL_SECOND_DETACH_TOPIC",
+                        "/model/robot_system/vacuum_2/detach",
+                    ),
+                    "state": os.environ.get(
+                        "ROBOT_CONTROL_SECOND_VACUUM_STATE_TOPIC",
+                        "/model/robot_system/vacuum_2/state",
+                    ),
+                }
+                bond_topics = {
+                    "attach": os.environ.get(
+                        "ROBOT_CONTROL_SECOND_BOND_ATTACH_TOPIC",
+                        "/model/robot_system/stack_bond_2/attach",
+                    ),
+                    "detach": os.environ.get(
+                        "ROBOT_CONTROL_SECOND_BOND_DETACH_TOPIC",
+                        "/model/robot_system/stack_bond_2/detach",
+                    ),
+                    "state": os.environ.get(
+                        "ROBOT_CONTROL_SECOND_BOND_STATE_TOPIC",
+                        "/model/robot_system/stack_bond_2/state",
+                    ),
+                }
+            else:
+                env_prefix = f"ROBOT_CONTROL_CHIP_{index}"
+                vacuum_prefix = f"/model/robot_system/vacuum_{index}"
+                bond_prefix = f"/model/robot_system/stack_bond_{index}"
+                vacuum_topics = {
+                    "attach": os.environ.get(
+                        f"{env_prefix}_ATTACH_TOPIC",
+                        f"{vacuum_prefix}/attach",
+                    ),
+                    "detach": os.environ.get(
+                        f"{env_prefix}_DETACH_TOPIC",
+                        f"{vacuum_prefix}/detach",
+                    ),
+                    "state": os.environ.get(
+                        f"{env_prefix}_VACUUM_STATE_TOPIC",
+                        f"{vacuum_prefix}/state",
+                    ),
+                }
+                bond_topics = {
+                    "attach": os.environ.get(
+                        f"{env_prefix}_BOND_ATTACH_TOPIC",
+                        f"{bond_prefix}/attach",
+                    ),
+                    "detach": os.environ.get(
+                        f"{env_prefix}_BOND_DETACH_TOPIC",
+                        f"{bond_prefix}/detach",
+                    ),
+                    "state": os.environ.get(
+                        f"{env_prefix}_BOND_STATE_TOPIC",
+                        f"{bond_prefix}/state",
+                    ),
+                }
+            self.VACUUM_JOINT_TOPICS[model_name] = vacuum_topics
+            self.STACK_BOND_TOPICS[model_name] = bond_topics
         self.DYNAMIC_SYSTEM_SERVICE = os.environ.get(
             "ROBOT_CONTROL_DYNAMIC_SYSTEM_SERVICE",
             f"/world/{self.GAZEBO_WORLD}/entity/system/add",
@@ -668,6 +767,10 @@ class MainControllerNode(Node):
             self.PLACEMENT_SUPPORT_TOKENS = self.model_collision_tokens(
                 normalized_support,
             )
+
+        pair_msg = String()
+        pair_msg.data = f'{self.PLACEMENT_SUPPORT_MODEL}|{self.RED_CHIP_MODEL}'
+        self.active_stack_pair_pub.publish(pair_msg)
 
         if log:
             self.get_logger().info(
@@ -3109,6 +3212,7 @@ class MainControllerNode(Node):
         second_pick_x=500.0,
         second_pick_y=0.0,
         second_chip_theta_deg=30.0,
+        stack_count=None,
         chip_z=None,
         place_x=None,
         place_y=None,
@@ -3121,95 +3225,84 @@ class MainControllerNode(Node):
         xy_theta_tolerance_um=None,
         z_tolerance_um=None,
     ):
-        """비전 정렬과 실제 contact를 사용해 두 칩을 순차 적층합니다."""
+        """비전 정렬과 실제 contact를 사용해 4~16개 칩을 순차 적층합니다."""
 
+        requested_count = (
+            self.STACK_COUNT
+            if stack_count is None
+            else validate_stack_count(stack_count)
+        )
+        if requested_count > len(self.CHIP_MODELS):
+            raise ValueError(
+                f'controller가 {len(self.CHIP_MODELS)}개 chip으로 초기화되어 '
+                f'{requested_count}개 적층을 실행할 수 없습니다.'
+            )
         chip_height = self.CHIP_REST_Z if chip_z is None else float(chip_z)
         target_place_x = self.SUBSTRATE_CENTER_X if place_x is None else float(place_x)
         target_place_y = self.SUBSTRATE_CENTER_Y if place_y is None else float(place_y)
+        pick_specs = list(chip_pick_specs()[:requested_count])
+        pick_specs[0] = (float(first_pick_x), float(first_pick_y), 0.0)
+        pick_specs[1] = (
+            float(second_pick_x),
+            float(second_pick_y),
+            float(second_chip_theta_deg),
+        )
         self.get_logger().info(
             'vision_stack_demo 시작: '
-            f'layer1={self.PRIMARY_CHIP_MODEL}@'
-            f'({first_pick_x:.3f}, {first_pick_y:.3f}, {chip_height:.3f})mm, '
-            f'layer2={self.SECOND_CHIP_MODEL}@'
-            f'({second_pick_x:.3f}, {second_pick_y:.3f}, {chip_height:.3f})mm/'
-            f'{float(second_chip_theta_deg):.3f}deg, '
+            f'stack_count={requested_count}, '
             f'stack=({target_place_x:.3f}, {target_place_y:.3f})mm'
         )
 
         try:
-            self.activate_chip(
-                self.SECOND_CHIP_MODEL,
-                support_model=self.PRIMARY_CHIP_MODEL,
-                stack_level=1,
-            )
-            self.reset_red_chip(
-                second_pick_x,
-                second_pick_y,
-                chip_height,
-                theta_deg=second_chip_theta_deg,
-            )
-
-            self.get_logger().info(
-                '적층 1/2: substrate_link와 첫 번째 chip contact를 기준으로 배치합니다.'
-            )
-            first_success = self.run_vision_pick_place_demo(
-                pick_x=first_pick_x,
-                pick_y=first_pick_y,
-                chip_z=chip_height,
-                chip_theta_deg=0.0,
-                place_x=target_place_x,
-                place_y=target_place_y,
-                place_theta_deg=0.0,
-                contact_z=contact_z,
-                place_reference='place_empty',
-                chip_model=self.PRIMARY_CHIP_MODEL,
-                support_model=self.SUBSTRATE_MODEL,
-                stack_level=0,
-                max_micro_iterations=max_micro_iterations,
-                settle_sec=settle_sec,
-                vision_settle_sec=vision_settle_sec,
-                vision_timeout_sec=vision_timeout_sec,
-                motion_timeout_sec=motion_timeout_sec,
-                xy_theta_tolerance_um=xy_theta_tolerance_um,
-                z_tolerance_um=z_tolerance_um,
-            )
-            if not first_success:
-                self.get_logger().error(
-                    '첫 번째 chip 적층 실패: 두 번째 chip 공정을 시작하지 않습니다.'
+            for stack_level, model_name in enumerate(
+                self.CHIP_MODELS[:requested_count]
+            ):
+                pick_x, pick_y, chip_theta_deg = pick_specs[stack_level]
+                support_model = (
+                    self.SUBSTRATE_MODEL
+                    if stack_level == 0
+                    else self.CHIP_MODELS[stack_level - 1]
                 )
-                return False
+                place_reference = (
+                    'place_empty' if stack_level == 0 else 'place_stacked'
+                )
+                self.get_logger().info(
+                    f'적층 {stack_level + 1}/{requested_count}: '
+                    f'{model_name}@({pick_x:.3f}, {pick_y:.3f})mm -> '
+                    f'{support_model}'
+                )
+                success = self.run_vision_pick_place_demo(
+                    pick_x=pick_x,
+                    pick_y=pick_y,
+                    chip_z=chip_height,
+                    chip_theta_deg=chip_theta_deg,
+                    pick_gripper_theta_deg=0.0,
+                    place_x=target_place_x,
+                    place_y=target_place_y,
+                    place_theta_deg=0.0,
+                    contact_z=contact_z,
+                    place_reference=place_reference,
+                    chip_model=model_name,
+                    support_model=support_model,
+                    stack_level=stack_level,
+                    max_micro_iterations=max_micro_iterations,
+                    settle_sec=settle_sec,
+                    vision_settle_sec=vision_settle_sec,
+                    vision_timeout_sec=vision_timeout_sec,
+                    motion_timeout_sec=motion_timeout_sec,
+                    xy_theta_tolerance_um=xy_theta_tolerance_um,
+                    z_tolerance_um=z_tolerance_um,
+                )
+                if not success:
+                    self.get_logger().error(
+                        f'{stack_level + 1}번째 chip 적층 실패: '
+                        '이후 chip 공정을 시작하지 않습니다.'
+                    )
+                    return False
 
             self.get_logger().info(
-                '적층 2/2: 첫 번째 chip과 두 번째 chip contact를 기준으로 배치합니다.'
-            )
-            second_success = self.run_vision_pick_place_demo(
-                pick_x=second_pick_x,
-                pick_y=second_pick_y,
-                chip_z=chip_height,
-                chip_theta_deg=second_chip_theta_deg,
-                pick_gripper_theta_deg=0.0,
-                place_x=target_place_x,
-                place_y=target_place_y,
-                place_theta_deg=0.0,
-                contact_z=contact_z,
-                place_reference='place_stacked',
-                chip_model=self.SECOND_CHIP_MODEL,
-                support_model=self.PRIMARY_CHIP_MODEL,
-                stack_level=1,
-                max_micro_iterations=max_micro_iterations,
-                settle_sec=settle_sec,
-                vision_settle_sec=vision_settle_sec,
-                vision_timeout_sec=vision_timeout_sec,
-                motion_timeout_sec=motion_timeout_sec,
-                xy_theta_tolerance_um=xy_theta_tolerance_um,
-                z_tolerance_um=z_tolerance_um,
-            )
-            if not second_success:
-                self.get_logger().error('두 번째 chip 적층에 실패했습니다.')
-                return False
-
-            self.get_logger().info(
-                'vision_stack_demo 완료: 두 번째 chip은 chip-chip contact 위치에서 고정되었습니다.'
+                f'vision_stack_demo 완료: {requested_count}개 chip이 '
+                '선택된 순서대로 고정되었습니다.'
             )
             return True
         finally:
@@ -3514,10 +3607,15 @@ class MainControllerNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MainControllerNode()
-
     parser = build_parser()
     parsed_args = parser.parse_args(args)
+    node_stack_count = (
+        parsed_args.stack_count
+        if parsed_args.command == 'vision_stack_demo'
+        else None
+    )
+
+    node = MainControllerNode(stack_count=node_stack_count)
 
     command_result = None
     try:
@@ -3639,6 +3737,11 @@ def build_parser():
     vision_demo_parser.add_argument('--z-tolerance-um', type=float, default=None)
 
     vision_stack_parser = subparsers.add_parser('vision_stack_demo')
+    vision_stack_parser.add_argument(
+        '--stack-count',
+        type=stack_count_arg,
+        default=None,
+    )
     vision_stack_parser.add_argument('--first-pick-x', type=float, default=500.0)
     vision_stack_parser.add_argument('--first-pick-y', type=float, default=400.0)
     vision_stack_parser.add_argument('--second-pick-x', type=float, default=500.0)
@@ -3768,6 +3871,7 @@ def run_command(node, args):
         )
     elif args.command == 'vision_stack_demo':
         command_result = node.run_vision_stack_demo(
+            stack_count=args.stack_count,
             first_pick_x=args.first_pick_x,
             first_pick_y=args.first_pick_y,
             second_pick_x=args.second_pick_x,

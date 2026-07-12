@@ -4,7 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from web_backend.api.robot_log_api import router as robot_log_router
-from web_backend.api.robot_control_api import router as robot_control_router
+from web_backend.api.robot_control_api import (
+    router as robot_control_router,
+    shutdown_managed_demo,
+)
 from web_backend.api.user_api import router as user_router
 from web_backend.core.config import frontend_settings
 from web_backend.db.postgres_connection import create_db_pool
@@ -17,6 +20,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await shutdown_managed_demo()
         await app.state.db_pool.close()
 
 

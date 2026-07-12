@@ -1,69 +1,49 @@
+# 웹 기반 비전 적층 시스템 실행 흐름
+
+웹의 Start에서 선택한 `stack_count` 하나가 Gazebo, joint bridge, 비전 적층 데모에 동일하게 적용된다. 웹 모드에서는 세 프로세스를 터미널에서 별도로 실행하지 않는다.
+
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as User (Operator)
-    participant A as API (FastAPI)
-    participant D as Database (PostgreSQL)
-    participant R as ROS2 & Vision Node
+    actor U as Operator
+    participant W as React Dashboard
+    participant A as FastAPI
+    participant G as Gazebo
+    participant B as Joint Bridge
+    participant V as Vision Stack Demo
 
-    Note over U, D: 1. 작업자 로그인 및 감사(Audit) 로그 기록
-    U->>A: 로그인 요청 (ID, Password 전송)
+    U->>W: Start 클릭 후 4~16개 선택
+    W->>A: POST /robot-control/demo/start<br/>{ stack_count: N }
     activate A
-    A->>D: 유저 정보 조회 및 패스워드 검증
-    activate D
-    D-->>A: 검증 완료 (user_index 반환)
-    deactivate D
-    
-    Note right of A: DB 트랜잭션 시작
-    A->>D: user_activity_logs 테이블에 'LOGIN' 액션 기록
-    A-->>U: 200 OK (JWT Token 발급)
-    deactivate A
+    A->>A: 실행 중 프로세스와 수동 Gazebo 확인
+    opt 다른 N의 웹 시스템이 실행 중
+        A->>A: 기존 데모 → bridge → Gazebo 종료
+    end
+    A->>G: STACK_COUNT=N으로 시작
 
-    Note over A, R: 2. 다이 본더 Pick 공정: 조-미(Macro-to-Micro) 정렬 로깅
-    activate R
-    R->>R: 새로운 반도체 칩 Pick 작업 진입
-    R->>A: 작업 시작 API 호출 (die_serial_number 전송)
-    activate A
-    A->>D: work_history 레코드 생성 (status: 'PICK_START')
-    activate D
-    D-->>A: history_id 반환
-    deactivate D
-    A-->>R: 201 Created (해당 작업의 history_id 응답)
-    deactivate A
+    loop 로봇과 N개 칩 모델 준비 확인
+        A->>G: ign model --list
+        G-->>A: 현재 모델 목록
+    end
 
-    Note right of R: 1단계: 거시적(Macro) 1차 정렬
-    R->>R: 중앙 매크로 카메라 촬영 및 OpenCV 오차(dx, dy) 계산
-    R->>A: 매크로 정렬 로그 단건 전송 (POST /api/logs/align)
-    activate A
-    A->>D: vision_align_logs 저장 (camera_type: 'MACRO')
-    A-->>R: 201 Created
+    A->>B: STACK_COUNT=N으로 시작
+    A->>V: STACK_COUNT=N으로 시작
+    V-->>A: 프로세스 실행 상태
+    A-->>W: 202 Accepted + 전체 프로세스 상태
     deactivate A
-    R->>R: 계산된 오차만큼 갠트리 로봇 1차 거시적(Coarse) 이동
+    W-->>U: 실행 상태 표시
 
-    Note right of R: 2단계: 미시적(Micro) 2차 초정밀 정렬
-    R->>R: 4개 코너 카메라 촬영 및 OpenCV 오차 계산 (센서 퓨전)
-    R->>A: 마이크로 정렬 로그 4건 리스트로 묶어서 전송 (Bulk POST)
-    activate A
-    Note right of A: DB 트랜잭션 (Bulk Insert)
-    A->>D: db.add_all()로 vision_align_logs 4건 한 번에 저장
-    A-->>R: 201 Created
-    deactivate A
-    R->>R: 융합된 오차만큼 로봇 2차 초정밀(Fine) 이동 및 Pick 안착 완료
+    Note over U,V: 같은 N으로 실행 중인 Start는 기존 상태 반환<br/>다른 N은 전체 자동 재시작 · 수동 ROS/Gazebo 충돌은 409 Conflict
 
-    R->>A: 작업 상태 업데이트 API 호출 (status: 'PICK_DONE')
+    U->>W: Stop 클릭
+    W->>A: POST /robot-control/demo/stop
     activate A
-    A->>D: work_history의 status 및 end_time 갱신
-    A-->>R: 200 OK
+    A->>V: 데모 프로세스 그룹 종료
+    A->>B: joint bridge 프로세스 그룹 종료
+    A->>G: Gazebo 프로세스 그룹 종료
+    A-->>W: 200 OK + 전체 종료 상태
     deactivate A
-
-    Note over A, R: 3. 로봇 에러 발생 시나리오 (예외 처리)
-    R->>R: 공정 진행 중 물리적 오류 감지 (예: 진공 압력 저하)
-    R->>A: 에러 로그 API 호출 (error_level, error_code, detail)
-    activate A
-    Note right of A: DB 트랜잭션 시작
-    A->>D: robot_error_logs에 상세 에러 내역 삽입
-    A->>D: 현재 진행 중인 work_history 상태를 'ERROR'로 변경
-    A-->>R: 201 Created (로봇 가동 일시 중지)
-    deactivate A
-    deactivate R
+    W-->>U: 중지 상태 표시
 ```
+
+상세 요청·응답과 오류 조건은 [API Specification](API%20Specification.md#10-robot-control-api)을 참고한다.

@@ -1,19 +1,40 @@
 from launch import LaunchDescription
-from launch.actions import SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
+MIN_STACK_COUNT = 4
+MAX_STACK_COUNT = 16
+
+
+def chip_model_name(layer_number):
+    return "check_chip" if layer_number == 1 else f"check_chip_{layer_number}"
+
+
+def parse_stack_count(context):
+    raw_value = LaunchConfiguration("stack_count").perform(context)
+    try:
+        stack_count = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"stack_count must be an integer: {raw_value}") from exc
+    if not MIN_STACK_COUNT <= stack_count <= MAX_STACK_COUNT:
+        raise RuntimeError(
+            f"stack_count must be between {MIN_STACK_COUNT} and {MAX_STACK_COUNT}: "
+            f"{stack_count}"
+        )
+    return stack_count
+
+
+def launch_setup(context):
+    stack_count = parse_stack_count(context)
     bridge_args = [
         "/model/robot_system/joint/joint_x/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_y/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_z/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_theta/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model",
-        (
-            "/world/empty/pose/info@tf2_msgs/msg/TFMessage"
-            "[ignition.msgs.Pose_V"
-        ),
+        "/world/empty/pose/info@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V",
         (
             "/world/empty/model/robot_system/link/theta_link_1/sensor/"
             "picker_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
@@ -24,23 +45,17 @@ def generate_launch_description():
             "substrate_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
             "[ignition.msgs.Contacts"
         ),
-        (
-            "/world/empty/model/check_chip/link/chip_link/sensor/"
-            "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
-            "[ignition.msgs.Contacts"
-        ),
-        (
-            "/world/empty/model/check_chip_2/link/chip_link/sensor/"
-            "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
-            "[ignition.msgs.Contacts"
-        ),
     ]
+    bridge_args.extend(
+        (
+            f"/world/empty/model/{chip_model_name(index)}/link/chip_link/sensor/"
+            "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
+            "[ignition.msgs.Contacts"
+        )
+        for index in range(1, stack_count + 1)
+    )
 
-    return LaunchDescription([
-        SetEnvironmentVariable(name="IGN_IP", value="127.0.0.1"),
-        SetEnvironmentVariable(name="GZ_IP", value="127.0.0.1"),
-        SetEnvironmentVariable(name="IGN_PARTITION", value="inha_die_bonder"),
-        SetEnvironmentVariable(name="GZ_PARTITION", value="inha_die_bonder"),
+    return [
         Node(
             package="ros_gz_bridge",
             executable="parameter_bridge",
@@ -53,6 +68,7 @@ def generate_launch_description():
             executable="pose_command_adapter",
             name="pose_command_adapter",
             parameters=[{
+                "stack_count": stack_count,
                 "input_unit": "mm",
                 "coordinate_frame": "gripper_abs",
                 "steps": 180,
@@ -70,4 +86,19 @@ def generate_launch_description():
             }],
             output="screen",
         ),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        SetEnvironmentVariable(name="IGN_IP", value="127.0.0.1"),
+        SetEnvironmentVariable(name="GZ_IP", value="127.0.0.1"),
+        SetEnvironmentVariable(name="IGN_PARTITION", value="inha_die_bonder"),
+        SetEnvironmentVariable(name="GZ_PARTITION", value="inha_die_bonder"),
+        DeclareLaunchArgument(
+            "stack_count",
+            default_value=str(MIN_STACK_COUNT),
+            description="Number of check-chip contact topics to bridge (4-16).",
+        ),
+        OpaqueFunction(function=launch_setup),
     ])

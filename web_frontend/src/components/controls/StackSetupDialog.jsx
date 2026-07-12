@@ -55,6 +55,7 @@ function StackPreview({ count }) {
 }
 
 export default function StackSetupDialog({
+  error,
   loading,
   onChange,
   onClose,
@@ -97,6 +98,7 @@ export default function StackSetupDialog({
       role="presentation"
     >
       <section
+        aria-describedby="stack-dialog-description"
         aria-labelledby="stack-dialog-title"
         aria-modal="true"
         className="max-h-[calc(100vh-2rem)] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/60 bg-white shadow-2xl"
@@ -110,12 +112,15 @@ export default function StackSetupDialog({
             <h2 className="mt-2 text-2xl font-black text-ink" id="stack-dialog-title">
               적층할 칩 개수를 선택하세요
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <p
+              className="mt-1 text-sm text-slate-500"
+              id="stack-dialog-description"
+            >
               4개부터 16개까지 선택할 수 있으며 기본값은 4개입니다.
             </p>
           </div>
           <button
-            aria-label="Close stack setup"
+            aria-label="칩 적층 설정 닫기"
             className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-ink disabled:opacity-50"
             disabled={loading}
             onClick={onClose}
@@ -143,7 +148,7 @@ export default function StackSetupDialog({
                 </div>
                 <div className="flex gap-2">
                   <button
-                    aria-label="Decrease chip count"
+                    aria-label="칩 개수 줄이기"
                     className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-moss hover:text-moss disabled:cursor-not-allowed disabled:opacity-35"
                     disabled={loading || stackCount <= MIN_STACK_COUNT}
                     onClick={() => updateCount(stackCount - 1)}
@@ -152,7 +157,7 @@ export default function StackSetupDialog({
                     <Minus size={17} />
                   </button>
                   <button
-                    aria-label="Increase chip count"
+                    aria-label="칩 개수 늘리기"
                     className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-moss hover:text-moss disabled:cursor-not-allowed disabled:opacity-35"
                     disabled={loading || stackCount >= MAX_STACK_COUNT}
                     onClick={() => updateCount(stackCount + 1)}
@@ -164,7 +169,8 @@ export default function StackSetupDialog({
               </div>
 
               <input
-                aria-label="Number of chips to stack"
+                aria-label="적층할 칩 개수"
+                aria-valuetext={`${stackCount}개`}
                 autoFocus
                 className="stack-range mt-8 h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200 disabled:cursor-not-allowed"
                 disabled={loading}
@@ -185,10 +191,21 @@ export default function StackSetupDialog({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
-              Gazebo와 joint bridge도 선택한 값과 동일한
-              <strong> STACK_COUNT={stackCount}</strong>로 실행되어 있어야 합니다.
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-900">
+              Start를 누르면 선택한 <strong>{stackCount}개</strong>를 기준으로
+              Gazebo, joint bridge, 비전 적층 데모가 모두 자동 실행됩니다.
+              로컬 환경에 따라 최초 준비에는 수십 초가 걸릴 수 있습니다.
             </div>
+
+            {error ? (
+              <div
+                aria-live="assertive"
+                className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700"
+                role="alert"
+              >
+                {error}
+              </div>
+            ) : null}
 
             <div className="flex gap-3">
               <button
@@ -206,7 +223,7 @@ export default function StackSetupDialog({
                 type="button"
               >
                 <Layers3 size={17} />
-                {loading ? "Starting..." : "Start"}
+                {loading ? "환경 시작 중..." : "Start"}
               </button>
             </div>
           </div>

@@ -36,6 +36,7 @@ MICRO_PIXEL_SIZE_X ?= 0.0068
 MICRO_PIXEL_SIZE_Y ?= 0.0068
 VISION_AXIS_SIGN_X ?= -1.0
 VISION_AXIS_SIGN_Y ?= 1.0
+STACK_COUNT ?= 4
 
 MOVE_X ?= 0
 MOVE_Y ?= 0
@@ -141,10 +142,10 @@ gazebo: ## Run Gazebo without the camera-specific launch.
 	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo.launch.py
 
 gazebo-camera: ## Run Gazebo with camera topics for vision alignment.
-	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo_camera.launch.py
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch robot_system_description gazebo_camera.launch.py stack_count:=$(STACK_COUNT)
 
 joint-bridge: ## Run local joint command bridge.
-	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core joint_bridge.launch.py
+	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core joint_bridge.launch.py stack_count:=$(STACK_COUNT)
 
 vision-bridge: ## Run local OpenCV camera vision alignment bridge.
 	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=$(VISION_PROCESS) place_mode:=$(PLACE_MODE) auto_command:=$(AUTO_COMMAND) backend_log_url:=$(BACKEND_LOG_URL) history_id:=$(HISTORY_ID) pixel_size_x_mm:=$(PIXEL_SIZE_X) pixel_size_y_mm:=$(PIXEL_SIZE_Y)
@@ -178,8 +179,8 @@ vision-ref-all: vision-ref-pick vision-ref-place-empty vision-ref-place-stacked 
 vision-demo: ## Run vision-aligned pick/place without changing the original demo.
 	$(call run_with_reference_vision_bridge,ros2 run robot_control_pkg main_controller vision_pick_place_demo --pick-x $(PICK_X) --pick-y $(PICK_Y) --place-x $(PLACE_X) --place-y $(PLACE_Y) --contact-z $(CONTACT_Z) --place-reference $(VISION_PLACE_REFERENCE) --max-micro-iterations $(VISION_MAX_MICRO_ITERATIONS) --settle-sec $(SETTLE_SEC) --vision-settle-sec $(VISION_SETTLE_SEC) --vision-timeout-sec $(VISION_REQUEST_TIMEOUT_SEC) --motion-timeout-sec $(VISION_MOTION_TIMEOUT_SEC) --xy-theta-tolerance-um $(VISION_XY_THETA_TOLERANCE_UM) --z-tolerance-um $(VISION_Z_TOLERANCE_UM))
 
-vision-stack-demo: ## Vision-align and stack two chips using substrate then chip contact.
-	$(call run_with_reference_vision_bridge,ros2 run robot_control_pkg main_controller vision_stack_demo --first-pick-x $(PICK_X) --first-pick-y $(PICK_Y) --second-pick-x $(SECOND_PICK_X) --second-pick-y $(SECOND_PICK_Y) --second-chip-theta-deg $(SECOND_CHIP_THETA_DEG) --place-x $(PLACE_X) --place-y $(PLACE_Y) --contact-z $(CONTACT_Z) --max-micro-iterations $(VISION_MAX_MICRO_ITERATIONS) --settle-sec $(VISION_STACK_SETTLE_SEC) --vision-settle-sec $(VISION_SETTLE_SEC) --vision-timeout-sec $(VISION_REQUEST_TIMEOUT_SEC) --motion-timeout-sec $(VISION_MOTION_TIMEOUT_SEC) --xy-theta-tolerance-um $(VISION_XY_THETA_TOLERANCE_UM) --z-tolerance-um $(VISION_Z_TOLERANCE_UM))
+vision-stack-demo: ## Vision-align and stack STACK_COUNT chips (4-16).
+	$(call run_with_reference_vision_bridge,ros2 run robot_control_pkg main_controller vision_stack_demo --stack-count $(STACK_COUNT) --first-pick-x $(PICK_X) --first-pick-y $(PICK_Y) --second-pick-x $(SECOND_PICK_X) --second-pick-y $(SECOND_PICK_Y) --second-chip-theta-deg $(SECOND_CHIP_THETA_DEG) --place-x $(PLACE_X) --place-y $(PLACE_Y) --contact-z $(CONTACT_Z) --max-micro-iterations $(VISION_MAX_MICRO_ITERATIONS) --settle-sec $(VISION_STACK_SETTLE_SEC) --vision-settle-sec $(VISION_SETTLE_SEC) --vision-timeout-sec $(VISION_REQUEST_TIMEOUT_SEC) --motion-timeout-sec $(VISION_MOTION_TIMEOUT_SEC) --xy-theta-tolerance-um $(VISION_XY_THETA_TOLERANCE_UM) --z-tolerance-um $(VISION_Z_TOLERANCE_UM))
 
 range-demo: ## Run local joint range demo.
 	export $(GAZEBO_ENV) && source $(ROS_SETUP) && source install/setup.bash && ros2 run robot_control_pkg main_controller range_demo --settle-sec $(SETTLE_SEC)
