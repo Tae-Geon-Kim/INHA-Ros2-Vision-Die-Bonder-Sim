@@ -19,9 +19,7 @@ Pick · Place · 적층 공정을 수행하는 디지털 트윈 프로젝트입�
 ---
 
 ## 🎬 Demo Video
-<video width="100%" controls autoplay loop muted>
-<source src="https://github.com/user-attachments/assets/bf4a3e9b-45e8-4337-bfec-a964e509ee01" type="video/mp4">
-</video>
+https://github.com/user-attachments/assets/bf4a3e9b-45e8-4337-bfec-a964e509ee01
 
 ---
 
