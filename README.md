@@ -89,31 +89,46 @@ https://github.com/user-attachments/assets/your-demo-video-id
 flowchart LR
     USER([Operator]) --> FE[React Dashboard]
 
-    subgraph WEB[Web Platform]
-        FE -->|REST API| BE[FastAPI Backend]
-        BE <--> DB[(PostgreSQL)]
+    subgraph LOCAL[Ubuntu Local PC]
+        subgraph WEB[Web Platform]
+            FE -->|REST API| BE[FastAPI Backend]
+        end
+
+        subgraph SIM[ROS 2 · Gazebo]
+            GZ[Gazebo World<br/>Robot · Chips · Cameras]
+            VB[Vision Alignment Bridge]
+            MC[Main Controller]
+            JB[Joint Bridge<br/>Pose Adapter]
+            ROBOT[Die-Bonder Robot]
+
+            GZ -->|Macro / Micro Images| VB
+            VB -->|Alignment Result| MC
+            MC -->|/robot/command_pose| JB
+            JB -->|Joint Commands| ROBOT
+            ROBOT -->|Contact / Joint State| JB
+            JB -->|Feedback| MC
+        end
+
+        SSH[SSH Local Port Forward<br/>127.0.0.1:54320]
     end
 
-    subgraph SIM[ROS 2 · Gazebo]
-        GZ[Gazebo World<br/>Robot · Chip · Cameras]
-        VB[Vision Alignment Bridge]
-        MC[Main Controller]
-        JB[Joint Bridge<br/>Pose Adapter]
-        ROBOT[Die-Bonder Robot]
-
-        GZ -->|Macro / Micro Images| VB
-        VB -->|Alignment Result| MC
-        MC -->|/robot/command_pose| JB
-        JB -->|Joint Commands| ROBOT
-        ROBOT -->|Contact / State| MC
+    subgraph GPU[School GPU Server · team05]
+        DB[(PostgreSQL<br/>team05 DB :54320)]
     end
 
-    BE -->|Start · stack_count 4~16| GZ
-    BE -->|동일한 stack_count| JB
-    BE -->|Gazebo 준비 후 실행| MC
+    BE -->|asyncpg| SSH
+    SSH -->|SSH Tunnel| DB
+
+    BE -->|1. Start Gazebo<br/>STACK_COUNT 4~16| GZ
+    BE -->|2. 동일한 STACK_COUNT| JB
+    BE -->|3. Gazebo 준비 후 실행| VB
+    BE -->|3. vision-stack-demo| MC
+
     BE -->|Stop · 전체 종료| GZ
     BE -->|Stop · 전체 종료| JB
+    BE -->|Stop · 전체 종료| VB
     BE -->|Stop · 전체 종료| MC
+
     VB -.->|Vision Logs| BE
     MC -.->|Work / Error Logs| BE
 ```
