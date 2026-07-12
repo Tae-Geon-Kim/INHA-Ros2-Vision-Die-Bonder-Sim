@@ -1,569 +1,455 @@
-# INHA ROS 2 Vision Die-Bonder Simulator
+<div align="center">
 
-비전 AI 기반 반도체 다이 본더 갠트리 로봇 정밀 정렬 시뮬레이션 프로젝트입니다.
+# 🤖 INHA Vision Die-Bonder Simulator
 
-ROS 2 Humble/Gazebo 환경에서 로봇 시뮬레이션을 실행하고, FastAPI 백엔드가 작업 이력과 로봇 로그를 PostgreSQL에 저장하며, React + Vite 프론트엔드가 로그 대시보드를 제공합니다.
+### ROS 2 · Gazebo · OpenCV 기반 반도체 다이 본더 정밀 정렬 시뮬레이터
 
-## 전체 구조
+가상 갠트리 로봇이 카메라 영상으로 칩의 위치 오차를 보정하고,
+Pick · Place · 적층 공정을 수행하는 디지털 트윈 프로젝트입니다.
+
+![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04-E95420?logo=ubuntu&logoColor=white)
+![ROS 2](https://img.shields.io/badge/ROS_2-Humble-22314E?logo=ros&logoColor=white)
+![Gazebo](https://img.shields.io/badge/Gazebo-Fortress-F58113)
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.138-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=20232A)
+
+[🚀 빠른 시작](#-빠른-시작) · [🏗️ 시스템 구조](#️-시스템-구조) · [📚 문서](#-문서) · [🧰 문제 해결](#-문제-해결)
+
+</div>
+
+---
+
+## 💡 프로젝트 소개
+
+반도체 다이 본딩 공정에서는 칩을 목표 위치에 정확히 정렬하고 안정적으로 적층하는 과정이 중요합니다. 이 프로젝트는 실제 장비 없이도 정렬 알고리즘과 로봇 동작, 공정 로그를 함께 검증할 수 있도록 다음 시스템을 하나의 ROS 2 워크스페이스로 구성합니다.
+
+- Gazebo 기반 다이 본더 갠트리 로봇과 칩·기판 시뮬레이션
+- Macro 카메라와 4개의 Micro 카메라를 활용한 조정렬·미세정렬
+- ROS 2 토픽 기반 위치 명령, 접촉 센서, 카메라 데이터 연결
+- FastAPI와 PostgreSQL 기반 작업·에러·비전 정렬 로그 관리
+- React 대시보드 기반 공정 상태 및 오차 수렴 시각화
+- 웹 버튼으로 시작하는 비전 기반 칩 적층 데모
+
+> 현재 `vision-stack-demo`는 2개 칩 적층 흐름을 기준으로 동작합니다. 적층 개수를 파라미터로 확장할 수 있도록 웹 버튼과 API는 특정 단수에 종속되지 않는 이름을 사용합니다.
+
+## ✨ 핵심 기능
+
+| 구분 | 기능 |
+| --- | --- |
+| 🦾 Robot Simulation | X/Y/Z/θ 축 갠트리 로봇, 칩·기판 모델, 접촉 센서 시뮬레이션 |
+| 📷 Vision Alignment | Macro 1대 + Micro 4대 영상 기반 위치·회전 오차 계산 |
+| 🎯 Precision Control | 조정렬(Coarse) 후 미세정렬(Fine)을 반복하는 보정 루프 |
+| 🧱 Vision Stacking | 비전 정렬 결과를 반영한 Pick · Place · 칩 적층 데모 |
+| 🔌 ROS–Gazebo Bridge | 명령 pose, joint command, 카메라 및 contact topic 연결 |
+| 🗄️ Data Logging | 작업 이력, 로봇 에러, 카메라별 정렬 offset을 PostgreSQL에 저장 |
+| 📊 Web Dashboard | 작업 현황, 에러 빈도, 정렬 오차 수렴 추이 모니터링 |
+| 🔐 Authentication | JWT access/refresh token과 HTTP-only cookie 기반 인증 |
+
+## 🏗️ 시스템 구조
+
+```mermaid
+flowchart LR
+    USER([Operator]) --> FE[React Dashboard]
+
+    subgraph WEB[Web Platform]
+        FE -->|REST API| BE[FastAPI Backend]
+        BE <--> DB[(PostgreSQL)]
+    end
+
+    subgraph SIM[ROS 2 · Gazebo]
+        GZ[Gazebo World<br/>Robot · Chip · Cameras]
+        VB[Vision Alignment Bridge]
+        MC[Main Controller]
+        JB[Joint Bridge<br/>Pose Adapter]
+        ROBOT[Die-Bonder Robot]
+
+        GZ -->|Macro / Micro Images| VB
+        VB -->|Alignment Result| MC
+        MC -->|/robot/command_pose| JB
+        JB -->|Joint Commands| ROBOT
+        ROBOT -->|Contact / State| MC
+    end
+
+    BE -->|Start Vision Stack Demo| MC
+    VB -.->|Vision Logs| BE
+    MC -.->|Work / Error Logs| BE
+```
+
+공정의 세부 메시지 흐름은 [📈 시퀀스 다이어그램](docs/sequence_diagram.md), 데이터 관계는 [🗃️ DB ERD](docs/db_table.md)에서 확인할 수 있습니다.
+
+## 🔄 비전 정렬 및 적층 흐름
+
+```mermaid
+flowchart TD
+    START([Demo Start]) --> PICK[Pick 위치로 이동]
+    PICK --> MACRO[Macro 카메라 조정렬]
+    MACRO --> MICRO[4개 Micro 카메라 미세정렬]
+    MICRO --> CHECK{허용 오차 이내?}
+    CHECK -- No --> CORRECT[XYZθ 보정 이동]
+    CORRECT --> MICRO
+    CHECK -- Yes --> CONTACT[접촉 높이 확인 후 Pick]
+    CONTACT --> PLACE[Place 위치로 이동]
+    PLACE --> P_ALIGN[Place 기준 영상 정렬]
+    P_ALIGN --> STACK[칩 배치 및 적층]
+    STACK --> NEXT{다음 칩?}
+    NEXT -- Yes --> PICK
+    NEXT -- No --> END([Process Complete])
+```
+
+## 🧩 기술 스택
+
+| Layer | Technologies |
+| --- | --- |
+| Simulation | ROS 2 Humble, Gazebo Fortress, URDF/Xacro, SDF |
+| Robotics | `rclpy`, `ros_gz_sim`, `ros_gz_bridge`, ROS 2 Launch |
+| Vision | OpenCV, NumPy, SciPy, multi-camera reference matching |
+| Backend | FastAPI, Pydantic, asyncpg, JWT, bcrypt |
+| Frontend | React 18, Vite 5, Zustand, Recharts, Tailwind CSS |
+| Database | PostgreSQL |
+| Tooling | Make, colcon, npm, Git/GitHub |
+
+## 🗂️ 저장소 구조
 
 ```text
-ros2_vision_ws
-├── src
-│   ├── robot_system_description   # URDF, Gazebo world, launch files
-│   ├── vision_core                # ROS bridge, pose adapter, motion utilities
-│   └── robot_control_pkg          # main_controller 데모/명령 노드
-├── vision_node                    # 비전 정렬 로직 실험 코드
-├── web_backend                    # FastAPI API 서버
-├── web_frontend                   # React + Vite 대시보드
-├── docs                           # DB 문서
-├── requirements.txt               # 백엔드 Python 의존성
-├── .env.example                   # 백엔드 환경변수 예시
+ros2_vision_ws/
+├── src/
+│   ├── robot_system_description/  # URDF, Gazebo world, models, sensors
+│   ├── robot_control_pkg/          # 공정 제어 및 vision-stack demo
+│   └── vision_core/                # joint/image bridge와 정렬 노드
+├── vision_node/                    # OpenCV 정렬 알고리즘 및 실험 코드
+├── web_backend/                    # FastAPI, 인증, 서비스, DB 모델
+├── web_frontend/                   # React 모니터링 대시보드
+├── docs/                           # API, 시퀀스, DB 설계 문서
+├── Makefile                        # 빌드·실행 명령 모음
+├── requirements.txt                # Python 패키지 목록
+├── .env.example                    # 백엔드 환경변수 예시
 └── README.md
 ```
 
-## 실행 흐름
-
-```text
-React/Vite Web
-  -> FastAPI Backend
-      -> PostgreSQL(team05 DB)
-      -> ROS demo process 실행 요청
-
-ROS/Gazebo
-  -> gazebo_camera.launch.py
-      -> Gazebo GUI + camera world 실행
-      -> robot_system spawn
-  -> joint_bridge.launch.py
-      -> /robot/command_pose 구독
-      -> joint command로 변환
-      -> ros_gz_bridge로 Gazebo joint topic 전달
-  -> main_controller
-      -> pick_place_demo / range_demo / joint_demo 명령 발행
-```
-
-웹 대시보드는 백엔드의 `/robot-logs/*`, `/users/*`, `/robot-control/*` API를 사용합니다.
-
-## 버전 기준
-
-```text
-OS: Ubuntu 22.04 LTS
-ROS 2: Humble
-Gazebo: Fortress / Ignition Gazebo
-Python: 3.10
-Node.js: 20.x 권장
-npm: 10.x 권장
-Database: PostgreSQL
-```
-
-Node가 12.x이면 Vite가 실행되지 않습니다. 팀원은 nvm으로 Node 20 계열을 맞추는 것을 권장합니다.
-
-## Git 작업 순서
-
-팀원이 올린 작업을 가져올 때:
-
-```bash
-git checkout develop
-git pull origin develop
-```
-
-본인 작업 브랜치에 develop 변경 반영:
-
-```bash
-git checkout feature/내브랜치명
-git merge develop
-```
-
-백엔드/프론트 브랜치를 둘 다 관리하는 경우 각각 반영합니다.
-
-```bash
-git checkout feature/web-backend
-git merge develop
-
-git checkout feature/web-frontend
-git merge develop
-```
-
-작업 완료 후:
-
-```bash
-git add .
-git commit -m "feat: 작업 내용 요약"
-git push origin feature/브랜치명
-```
-
-GitHub에서 `develop` 브랜치로 Pull Request를 생성합니다.
-
-## 백엔드 환경 설정
-
-### 1. Python 가상환경 생성
-
-```bash
-cd ~/ros2_vision_ws
-python3.10 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-이미 `.venv`가 있으면 activate 후 의존성만 설치합니다.
-
-```bash
-cd ~/ros2_vision_ws
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-### 2. 환경변수 파일 생성
-
-```bash
-cd ~/ros2_vision_ws
-cp .env.example .env
-```
-
-`.env`의 DB 비밀번호, JWT secret, 초기 관리자 계정 값은 팀 공유 값으로 수정합니다.
-
-```env
-DB_USER=team05_db
-DB_PASSWORD=팀_공유_DB_비밀번호
-DB_NAME=team05_db
-DB_HOST=127.0.0.1
-DB_PORT=54320
-
-SECRET_KEY=팀_공유_SECRET_KEY
-
-INITIAL_USER_ID=admin_team05
-INITIAL_USER_PASSWORD=ChangeThis05!
-```
-
-`.env`는 개인 환경 파일이므로 커밋하지 않습니다.
-
-### 3. PostgreSQL SSH 터널 실행
-
-로컬 백엔드가 GPU 서버 PostgreSQL을 사용하려면 별도 터미널에서 SSH 터널을 먼저 켭니다.
-
-```bash
-ssh -N -L 54320:127.0.0.1:54320 team05@165.246.170.53
-```
-
-터미널이 멈춘 것처럼 보이면 정상입니다. 이 터미널은 백엔드를 사용하는 동안 닫지 않습니다.
-
-터널을 사용하는 경우 `.env`는 아래처럼 둡니다.
-
-```env
-DB_HOST=127.0.0.1
-DB_PORT=54320
-```
-
-로컬 54320 포트가 이미 사용 중이면 다른 로컬 포트를 사용합니다.
-
-```bash
-ssh -N -L 15432:127.0.0.1:54320 team05@165.246.170.53
-```
-
-이 경우 `.env`도 바꿉니다.
-
-```env
-DB_HOST=127.0.0.1
-DB_PORT=15432
-```
-
-### 4. DB 테이블 생성 및 초기 계정 동기화
-
-터널이 켜진 상태에서 실행합니다.
-
-```bash
-cd ~/ros2_vision_ws
-source .venv/bin/activate
-python -m web_backend.db.init_db
-python -m web_backend.db.register_user
-```
-
-`register_user`는 `.env`의 `INITIAL_USER_ID`, `INITIAL_USER_PASSWORD` 기준으로 계정을 생성하거나 기존 계정 비밀번호를 갱신합니다.
-
-### 5. 백엔드 실행
-
-```bash
-cd ~/ros2_vision_ws
-source .venv/bin/activate
-python -m uvicorn web_backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-`uvicorn ...` 대신 `python -m uvicorn ...`을 권장합니다. 이렇게 실행하면 현재 `.venv`의 패키지를 확실히 사용합니다.
-
-Swagger:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-Health check:
-
-```text
-http://127.0.0.1:8000/health
-```
-
-## 프론트엔드 환경 설정
-
-### 1. Node.js 설치
-
-Ubuntu 기본 저장소의 `nodejs`, `npm`은 버전이 낮을 수 있습니다. nvm 사용을 권장합니다.
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-source ~/.bashrc
-nvm install 20
-nvm use 20
-node -v
-npm -v
-```
-
-### 2. 프론트 의존성 설치
-
-```bash
-cd ~/ros2_vision_ws/web_frontend
-npm ci
-```
-
-`package-lock.json` 기준으로 동일한 버전을 설치합니다. `node_modules/`는 커밋하지 않습니다.
-
-### 3. 프론트 환경변수
-
-필요하면 `web_frontend/.env`를 생성합니다.
-
-```bash
-cd ~/ros2_vision_ws/web_frontend
-cp .env.example .env
-```
-
-기본값:
-
-```env
-VITE_API_BASE_URL=http://127.0.0.1:8000
-```
-
-### 4. 프론트 실행
-
-```bash
-cd ~/ros2_vision_ws/web_frontend
-npm run dev
-```
-
-Vite:
-
-```text
-http://127.0.0.1:5173
-```
-
-## 웹 로그인
-
-백엔드와 프론트가 모두 실행 중이어야 로그인할 수 있습니다.
-
-```text
-ID: .env의 INITIAL_USER_ID
-PW: .env의 INITIAL_USER_PASSWORD
-```
-
-예시:
-
-```text
-ID: admin_team05
-PW: ChangeThis05!
-```
-
-프론트는 로그인 요청을 `/users/login`으로 보내고, 백엔드는 JWT access/refresh token을 HTTP-only cookie로 설정합니다.
-
-## 주요 API
-
-### 인증
-
-```text
-POST /users/login
-POST /users/logout
-POST /users/refresh
-```
-
-### 로봇 로그
-
-```text
-POST  /robot-logs/work-history
-PATCH /robot-logs/work-history/{history_id}
-GET   /robot-logs/work-history
-GET   /robot-logs/work-history/{history_id}
-
-POST  /robot-logs/errors
-GET   /robot-logs/errors
-
-POST  /robot-logs/vision-align
-GET   /robot-logs/vision-align
-```
-
-### 로봇 데모 제어
-
-```text
-GET  /robot-control/demo/status
-POST /robot-control/demo/start
-POST /robot-control/demo/stop
-```
-
-`/robot-control/demo/start`는 FastAPI 서버가 실행 중인 환경에서 아래 명령을 별도 프로세스로 실행합니다.
-
-```bash
-ros2 run robot_control_pkg main_controller pick_place_demo
-```
-
-Gazebo와 bridge가 먼저 실행되어 있어야 실제 시뮬레이션이 움직입니다.
-
-## ROS/Gazebo 실행
-
-### 1. ROS 환경 source
-
-```bash
-source /opt/ros/humble/setup.bash
-```
-
-OpenCV 브리지를 실행하려면 시스템 Python에 OpenCV/Numpy가 필요합니다.
+## ✅ 실행 환경
+
+| Requirement | Version |
+| --- | --- |
+| OS | Ubuntu 22.04 LTS |
+| ROS 2 | Humble |
+| Gazebo | Fortress / Ignition Gazebo |
+| Python | 3.10 |
+| Node.js | 20.x 권장, 최소 18.18 |
+| npm | 9.x 이상 |
+| Database | PostgreSQL |
+
+ROS 2, Gazebo, `colcon`, `ros_gz` 패키지는 시스템에 설치되어 있어야 합니다. OpenCV 브리지를 위한 시스템 패키지는 다음과 같이 설치합니다.
 
 ```bash
 sudo apt update
 sudo apt install python3-opencv python3-numpy
 ```
 
-### 2. 워크스페이스 빌드
+## 🚀 빠른 시작
+
+### 1. 저장소 및 애플리케이션 의존성 준비
 
 ```bash
+git clone https://github.com/Tae-Geon-Kim/INHA-Ros2-Vision-Die-Bonder-Sim.git ~/ros2_vision_ws
 cd ~/ros2_vision_ws
-colcon build --symlink-install
-source install/setup.bash
+
+cp .env.example .env
+make install-backend
+make install-frontend
+make ros-build
 ```
 
-### 3. Gazebo 시뮬레이션 실행
+`.env`의 DB 비밀번호, JWT secret, 초기 관리자 계정은 팀 공유 값으로 변경합니다. `.env`는 개인 설정 및 비밀정보를 포함하므로 Git에 커밋하지 않습니다.
 
-터미널 1:
+### 2. 데이터베이스 연결
+
+로컬 환경에서 팀 PostgreSQL 서버를 사용할 경우 별도 터미널에 SSH 터널을 유지합니다.
 
 ```bash
 cd ~/ros2_vision_ws
+make db-tunnel
+```
+
+기본 연결은 로컬 `54320` 포트를 원격 `54320` 포트로 전달합니다. 포트를 바꾸려면 Make 변수와 `.env`의 `DB_PORT`를 함께 변경합니다.
+
+```bash
+make db-tunnel LOCAL_DB_PORT=15432
+```
+
+최초 한 번 테이블과 관리자 계정을 준비합니다.
+
+```bash
+make init-db
+make register-user
+```
+
+### 3. Gazebo와 ROS bridge 실행
+
+터미널 1 — Gazebo 카메라 시뮬레이션:
+
+```bash
+cd ~/ros2_vision_ws
+make gazebo-camera
+```
+
+터미널 2 — joint/contact bridge:
+
+```bash
+cd ~/ros2_vision_ws
+make joint-bridge
+```
+
+### 4. 웹 애플리케이션 실행
+
+터미널 3 — FastAPI:
+
+```bash
+cd ~/ros2_vision_ws
+make backend
+```
+
+터미널 4 — React/Vite:
+
+```bash
+cd ~/ros2_vision_ws
+make frontend
+```
+
+브라우저에서 `http://127.0.0.1:5173`에 접속하고 로그인한 뒤 **Start Vision Stack Demo** 버튼을 누릅니다. 버튼은 백엔드에서 다음 명령을 별도 프로세스로 실행합니다.
+
+```bash
+make vision-stack-demo
+```
+
+> 버튼으로 데모를 시작했다면 다른 터미널에서 `make vision-stack-demo`를 중복 실행하지 마세요. 두 제어 프로세스가 같은 로봇에 명령을 보내 충돌할 수 있습니다.
+
+## 🎮 CLI로 데모 실행
+
+웹 없이 공정만 실행하려면 Gazebo와 joint bridge를 먼저 켠 후 세 번째 터미널에서 실행합니다.
+
+```bash
+cd ~/ros2_vision_ws
+make vision-stack-demo
+```
+
+주요 기본 파라미터는 실행 시 덮어쓸 수 있습니다.
+
+```bash
+make vision-stack-demo \
+  PICK_X=500 PICK_Y=400 \
+  SECOND_PICK_X=500 SECOND_PICK_Y=0 \
+  SECOND_CHIP_THETA_DEG=30 \
+  PLACE_X=140 PLACE_Y=0
+```
+
+다른 유용한 명령:
+
+```bash
+make help                  # 사용 가능한 Make target 확인
+make safe                  # 로봇을 안전 위치로 이동
+make chip-reset            # 칩 위치 초기화
+make model-list            # Gazebo 모델 확인
+make vision-demo           # 단일 vision pick/place 데모
+make range-demo            # joint 이동 범위 데모
+```
+
+## 📸 비전 Reference 준비
+
+비전 데모는 Pick, 빈 기판 Place, 적층 Place 기준 영상을 사용합니다. 기준 이미지를 다시 취득해야 할 때 다음 target을 실행합니다.
+
+```bash
+make vision-ref-pick
+make vision-ref-place-empty
+make vision-ref-place-stacked
+
+# 세 reference 세트를 순서대로 모두 생성
+make vision-ref-all
+```
+
+기본 reference 경로:
+
+```text
+src/robot_system_description/test_images/vision_references/
+├── pick/
+├── place_empty/
+└── place_stacked/
+```
+
+## 🌐 서비스 주소
+
+| Service | URL |
+| --- | --- |
+| React Dashboard | `http://127.0.0.1:5173` |
+| FastAPI | `http://127.0.0.1:8000` |
+| Swagger UI | `http://127.0.0.1:8000/docs` |
+| Health Check | `http://127.0.0.1:8000/health` |
+
+로그인은 `.env`의 `INITIAL_USER_ID`, `INITIAL_USER_PASSWORD` 값을 사용합니다. 인증 성공 시 access/refresh token은 HTTP-only cookie로 설정됩니다.
+
+## 🔌 주요 API
+
+| Domain | Endpoints |
+| --- | --- |
+| Authentication | `POST /users/login`, `POST /users/logout`, `POST /users/refresh` |
+| Work History | `POST/GET /robot-logs/work-history`, `PATCH /robot-logs/work-history/{history_id}` |
+| Robot Error | `POST/GET /robot-logs/errors` |
+| Vision Align | `POST/GET /robot-logs/vision-align` |
+| Demo Control | `GET /robot-control/demo/status`, `POST /robot-control/demo/start`, `POST /robot-control/demo/stop` |
+
+현재 요청·응답 모델의 기준 문서는 실행 중인 Swagger UI입니다. 별도 문서화 작업은 [📘 API Specification](docs/API%20Specification.md)에서 이어갑니다.
+
+## 📚 문서
+
+| Document | Description |
+| --- | --- |
+| [📘 API Specification](docs/API%20Specification.md) | 인증, 로그, 로봇 제어 API 명세 (작성 중) |
+| [📈 Sequence Diagram](docs/sequence_diagram.md) | 로그인부터 비전 정렬·에러 처리까지의 호출 흐름 |
+| [🗃️ Database ERD](docs/db_table.md) | 사용자, 작업 이력, 에러 및 비전 로그 관계 |
+| [⚡ Swagger UI](http://127.0.0.1:8000/docs) | 실행 중인 백엔드의 OpenAPI 문서 |
+
+## ⚙️ 주요 환경변수
+
+```env
+# PostgreSQL
+DB_HOST=127.0.0.1
+DB_PORT=54320
+DB_USER=team05_db
+DB_PASSWORD=change-me
+DB_NAME=team05_db
+
+# JWT
+SECRET_KEY=change-me
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+REFRESH_TOKEN_EXPIRE_DAYS=30
+
+# Initial operator
+INITIAL_USER_ID=admin_team05
+INITIAL_USER_PASSWORD=change-me
+```
+
+프론트 API 주소를 바꿀 때는 `web_frontend/.env`를 사용합니다.
+
+```env
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+## 🧪 빌드 및 검증
+
+```bash
+# ROS 2 workspace
+make ros-build
+
+# ROS package tests
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch robot_system_description gazebo_camera.launch.py
+colcon test
+colcon test-result --verbose
+
+# Frontend production build
+cd web_frontend
+npm run build
 ```
 
-### 4. ROS-Gazebo bridge 및 pose adapter 실행
+## 🧰 문제 해결
 
-터미널 2:
+<details>
+<summary><strong>DB 연결이 거부됩니다</strong></summary>
+
+SSH 터널이 실행 중인지, `.env`의 `DB_HOST`와 `DB_PORT`가 터널 설정과 일치하는지 확인합니다.
 
 ```bash
-cd ~/ros2_vision_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch vision_core joint_bridge.launch.py
+make db-tunnel
 ```
 
-### 5. 카메라/OpenCV 정렬 브리지 실행
+</details>
 
-터미널 3:
+<details>
+<summary><strong>백엔드가 전역 Python 패키지를 사용합니다</strong></summary>
+
+Makefile은 기본적으로 `.venv/bin/python`을 사용합니다. 가상환경과 의존성을 다시 준비합니다.
 
 ```bash
-cd ~/ros2_vision_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=pick
+make install-backend
+make backend
 ```
 
-이 launch는 Gazebo 카메라 이미지 토픽을 ROS `sensor_msgs/Image`로 bridge하고, OpenCV 정렬 오차를 `/vision/alignment_result`에 JSON 문자열로 publish합니다.
+</details>
 
-자동 로봇 보정 명령까지 발행하려면 `auto_command:=true`를 명시합니다.
+<details>
+<summary><strong>Vite에서 문법 오류가 발생합니다</strong></summary>
 
-```bash
-ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=pick auto_command:=true
-```
-
-보정 명령은 `/robot/command_pose`로 발행되고, `joint_bridge.launch.py`의 `pose_command_adapter`가 Gazebo joint command로 변환합니다.
-
-캘리브레이션 값이 정해지면 `pixel_size_x_mm`, `pixel_size_y_mm`를 실제 mm/pixel 값으로 지정합니다.
-
-```bash
-ros2 launch vision_core vision_alignment_bridge.launch.py \
-  alignment_process:=pick \
-  auto_command:=true \
-  pixel_size_x_mm:=0.005 \
-  pixel_size_y_mm:=0.005
-```
-
-백엔드 `vision_align_logs`에 정렬값을 기록하려면 작업 이력 `history_id`와 API URL을 같이 지정합니다.
-
-```bash
-ros2 launch vision_core vision_alignment_bridge.launch.py \
-  alignment_process:=pick \
-  backend_log_url:=http://127.0.0.1:8000/robot-logs/vision-align \
-  history_id:=1
-```
-
-### 6. 로봇 데모 실행
-
-터미널 4:
-
-```bash
-cd ~/ros2_vision_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 run robot_control_pkg main_controller pick_place_demo
-```
-
-다른 데모:
-
-```bash
-ros2 run robot_control_pkg main_controller joint_demo
-ros2 run robot_control_pkg main_controller range_demo
-ros2 run robot_control_pkg main_controller theta_demo
-```
-
-웹 대시보드의 `Start Gazebo Demo` 버튼도 백엔드 API를 통해 `pick_place_demo`를 실행합니다.
-
-## DB 테이블
-
-백엔드는 아래 테이블을 사용합니다.
-
-```text
-"user"              # 로그인 사용자
-user_logs           # 로그인/로그아웃 이력
-work_history        # 작업 이력
-robot_error_logs    # 로봇 에러 로그
-vision_align_logs   # 비전 정렬 로그
-```
-
-테이블 상세 구조는 [docs/db_table.md](docs/db_table.md)를 참고합니다.
-
-## 실행 순서 요약
-
-웹 기능만 확인:
-
-```text
-1. SSH 터널 실행
-2. .env 설정
-3. python -m web_backend.db.init_db
-4. python -m web_backend.db.register_user
-5. python -m uvicorn web_backend.main:app --reload --host 127.0.0.1 --port 8000
-6. web_frontend에서 npm ci
-7. npm run dev
-8. http://127.0.0.1:5173 접속
-```
-
-ROS/Gazebo까지 확인:
-
-```text
-1. colcon build --symlink-install
-2. ros2 launch robot_system_description gazebo_camera.launch.py
-3. ros2 launch vision_core joint_bridge.launch.py
-4. ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=pick
-5. 백엔드 실행
-6. 프론트 실행
-7. Dashboard에서 Start Gazebo Demo 클릭
-```
-
-## 문제 해결
-
-### DB 연결 실패
-
-에러:
-
-```text
-ConnectionRefusedError: Connect call failed ('127.0.0.1', 54320)
-```
-
-원인: PostgreSQL SSH 터널이 꺼져 있거나 `.env`의 `DB_PORT`가 터널 포트와 다릅니다.
-
-해결:
-
-```bash
-ssh -N -L 54320:127.0.0.1:54320 team05@165.246.170.53
-```
-
-### uvicorn이 전역 Python으로 실행됨
-
-로그 경로에 아래처럼 `.local`이 보이면 전역 패키지를 사용 중입니다.
-
-```text
-/home/사용자/.local/lib/python3.10/site-packages
-```
-
-해결:
-
-```bash
-cd ~/ros2_vision_ws
-source .venv/bin/activate
-python -m uvicorn web_backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-### uvicorn 옵션 인식 실패
-
-에러:
-
-```text
-Got unexpected extra arguments (—reload —host ...)
-```
-
-원인: `--`가 일반 하이픈 두 개가 아니라 긴 대시 문자 `—`로 입력되었습니다.
-
-해결:
-
-```bash
-python -m uvicorn web_backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-### Vite 실행 오류
-
-에러:
-
-```text
-SyntaxError: Unexpected reserved word
-```
-
-원인: Node.js 버전이 낮습니다.
-
-해결:
+Node.js가 너무 오래된 경우가 많습니다. Node 20을 권장합니다.
 
 ```bash
 nvm install 20
 nvm use 20
-cd ~/ros2_vision_ws/web_frontend
-npm ci
-npm run dev
+make install-frontend
+make frontend
 ```
 
-### 프론트 로그인에서 Failed to fetch
+</details>
 
-원인 후보:
+<details>
+<summary><strong>웹 버튼을 눌렀지만 로봇이 움직이지 않습니다</strong></summary>
 
-```text
-1. 백엔드가 실행 중이 아님
-2. VITE_API_BASE_URL이 실제 백엔드 주소와 다름
-3. FRONTEND_ORIGINS에 프론트 origin이 없음
-```
-
-확인:
-
-```text
-http://127.0.0.1:8000/health
-```
-
-정상 응답:
-
-```json
-{"status":"ok"}
-```
-
-## 커밋 메시지 규칙
-
-```text
-feat: 새로운 기능
-fix: 버그 수정
-docs: 문서 수정
-refactor: 구조 개선
-chore: 설정/빌드/기타 작업
-```
-
-예시:
+Gazebo와 joint bridge가 먼저 실행 중인지 확인하고 데모 로그를 확인합니다.
 
 ```bash
-git commit -m "docs: 프로젝트 실행 README 통합"
+tail -f ~/ros2_vision_ws/log/robot_demo.log
+ros2 node list
+ros2 topic list
 ```
+
+</details>
+
+<details>
+<summary><strong>카메라 영상 topic이 보이지 않습니다</strong></summary>
+
+```bash
+ros2 topic list | grep image
+ros2 topic hz /camera/macro/image
+```
+
+실제 topic 이름은 world 및 sensor 설정에 따라 달라질 수 있으므로 `ros2 topic list` 결과를 우선 확인합니다.
+
+</details>
+
+## 🌿 Git 협업 방식
+
+```bash
+# 최신 develop 반영
+git switch develop
+git pull --ff-only origin develop
+
+# 기능 브랜치 생성
+git switch -c feature/기능명
+
+# 작업 완료 후 push
+git add <변경한-파일>
+git commit -m "feat: 작업 내용 요약"
+git push -u origin feature/기능명
+```
+
+GitHub에서 기능 브랜치 → `develop` 방향으로 Pull Request를 생성합니다.
+
+커밋 prefix 예시:
+
+| Prefix | Use |
+| --- | --- |
+| `feat` | 새로운 기능 |
+| `fix` | 버그 수정 |
+| `docs` | 문서 수정 |
+| `refactor` | 동작 변경 없는 코드 개선 |
+| `test` | 테스트 추가·수정 |
+| `chore` | 설정 및 기타 작업 |
+
+---
+
+<div align="center">
+
+### 🎓 INHA University · Team 05
+
+**Vision-guided precision automation for semiconductor die bonding**
+
+</div>
