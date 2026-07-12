@@ -108,7 +108,12 @@ flowchart LR
         ROBOT -->|Contact / State| MC
     end
 
-    BE -->|Start · stack_count 4~16| MC
+    BE -->|Start · stack_count 4~16| GZ
+    BE -->|동일한 stack_count| JB
+    BE -->|Gazebo 준비 후 실행| MC
+    BE -->|Stop · 전체 종료| GZ
+    BE -->|Stop · 전체 종료| JB
+    BE -->|Stop · 전체 종료| MC
     VB -.->|Vision Logs| BE
     MC -.->|Work / Error Logs| BE
 ```
@@ -227,32 +232,16 @@ make init-db
 make register-user
 ```
 
-#### 3️⃣ Gazebo와 ROS bridge 실행
+#### 3️⃣ 웹 애플리케이션 실행
 
-터미널 1 — Gazebo 카메라 시뮬레이션:
-
-```bash
-cd ~/ros2_vision_ws
-make gazebo-camera
-```
-
-터미널 2 — joint/contact bridge:
-
-```bash
-cd ~/ros2_vision_ws
-make joint-bridge
-```
-
-#### 4️⃣ 웹 애플리케이션 실행
-
-터미널 3 — FastAPI:
+터미널 1 — FastAPI:
 
 ```bash
 cd ~/ros2_vision_ws
 make backend
 ```
 
-터미널 4 — React/Vite:
+터미널 2 — React/Vite:
 
 ```bash
 cd ~/ros2_vision_ws
@@ -261,20 +250,37 @@ make frontend
 
 브라우저에서 `http://127.0.0.1:5173`에 접속하고 로그인한 뒤 **Start** 버튼을 누릅니다. 설정 창에서 슬라이더로 4~16개의 칩을 선택할 수 있으며 기본값은 4개입니다. 선택한 숫자가 커질수록 미리보기의 칩도 실시간으로 쌓입니다.
 
-선택값은 `/robot-control/demo/start` API의 `stack_count`로 전달되고 백엔드는 다음과 동일한 명령을 실행합니다.
+선택값은 `/robot-control/demo/start` API의 `stack_count`로 전달됩니다. 백엔드는 그 값 하나를 세 프로세스에 동일하게 적용하여 다음 순서로 자동 실행합니다.
+
+1. `make gazebo-camera STACK_COUNT=<선택값>`
+2. 선택한 개수의 Gazebo 칩 모델이 준비될 때까지 확인
+3. `make joint-bridge STACK_COUNT=<선택값>`
+4. `make vision-stack-demo STACK_COUNT=<선택값>`
+
+이미 다른 개수로 웹 시스템이 실행 중이어도 새로 고른 값을 기준으로 기존
+프로세스를 정리한 뒤 자동으로 다시 시작합니다. 이전 데모가 완료된 뒤 다시
+Start해도 칩 위치가 남지 않도록 Gazebo 월드부터 새로 시작합니다.
+
+따라서 **웹 모드에서는 `make gazebo-camera`, `make joint-bridge`, `make vision-stack-demo`를 직접 실행할 필요가 없습니다.** **Stop**을 누르면 웹에서 시작한 데모, joint bridge, Gazebo가 모두 종료됩니다. 최초 Start는 Gazebo 모델을 준비하는 동안 최대 수십 초가 걸릴 수 있습니다.
+
+> 웹 모드를 사용하기 전에 터미널에서 직접 실행한 Gazebo, joint bridge, 비전 데모를 `Ctrl+C`로 종료하세요. 수동 프로세스가 남아 있으면 중복 제어와 토픽 충돌을 막기 위해 Start 요청이 거부됩니다.
+
+#### 4️⃣ 터미널에서 직접 실행하기 (웹 모드와 별도)
+
+웹 대시보드를 사용하지 않고 ROS 데모만 직접 실행하려면 세 터미널에서 **같은** `STACK_COUNT`를 지정합니다.
 
 ```bash
-make vision-stack-demo STACK_COUNT=<선택값>
-```
-
-현재 Gazebo와 joint bridge는 시작할 때 필요한 칩 모델과 contact topic을 구성하므로 웹에서 선택할 값과 동일한 `STACK_COUNT`로 실행해야 합니다.
-
-```bash
+# 터미널 1
 make gazebo-camera STACK_COUNT=8
+
+# 터미널 2
 make joint-bridge STACK_COUNT=8
+
+# 터미널 3
+make vision-stack-demo STACK_COUNT=8
 ```
 
-> 웹 버튼으로 데모를 시작했다면 별도 터미널에서 같은 데모 명령을 중복 실행하지 마세요. 두 제어 프로세스가 같은 로봇에 명령을 보내 충돌할 수 있습니다.
+수동 실행 모드와 웹 Start를 동시에 사용하지 마세요.
 
 ### 📸 비전 Reference 준비
 

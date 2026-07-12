@@ -10,7 +10,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from ros_gz_interfaces.msg import Contacts
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, String
 
 from vision_core.joint_commander import load_state, save_state
 from vision_core.motion_profile import (
@@ -37,8 +37,16 @@ LIMIT_EPSILON = 1e-6
 CONTACT_DESCENT_EPSILON = 0.0002
 CONTACT_PAIR_REARM_SEC = 5.0
 PICK_CONTACT_TARGET_Z_MAX = -0.112
+MIN_STACK_COUNT = 4
+MAX_STACK_COUNT = 16
 PICKER_CONTACT_TOKENS = ("picker_contact_collision",)
 SUBSTRATE_CONTACT_TOKENS = ("substrate_link_collision", "substrate_link")
+<<<<<<< HEAD
+
+
+def chip_model_name(layer_number: int) -> str:
+    return "check_chip" if layer_number == 1 else f"check_chip_{layer_number}"
+=======
 MAX_STACK_CHIP_COUNT = 16
 CHIP_MODEL_NAMES = tuple(
     "check_chip" if chip_index == 1 else f"check_chip_{chip_index}"
@@ -55,6 +63,7 @@ def collision_chip_model(collision_name: str) -> str | None:
         ):
             return model_name
     return None
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
 
 
 def format_joint_pose_si(pose: JointPose) -> str:
@@ -114,7 +123,11 @@ class PoseCommandAdapter(Node):
         self.declare_parameter("settle_samples", 5)
         self.declare_parameter("restore_state", False)
         self.declare_parameter("idle_hold_period", 0.05)
+<<<<<<< HEAD
+        self.declare_parameter("stack_count", MIN_STACK_COUNT)
+=======
         self.declare_parameter("stack_count", 4)
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
 
         self.scale = unit_scale(self.get_parameter("input_unit").value)
         self.coordinate_frame = self.get_parameter("coordinate_frame").value
@@ -139,11 +152,25 @@ class PoseCommandAdapter(Node):
             self.get_parameter("idle_hold_period").value
         )
         self.stack_count = int(self.get_parameter("stack_count").value)
+<<<<<<< HEAD
+        if not MIN_STACK_COUNT <= self.stack_count <= MAX_STACK_COUNT:
+            raise ValueError(
+                f"stack_count must be between {MIN_STACK_COUNT} and "
+                f"{MAX_STACK_COUNT}: {self.stack_count}"
+            )
+        self.chip_models = tuple(
+            chip_model_name(index)
+            for index in range(1, self.stack_count + 1)
+        )
+        self.active_chip_model = self.chip_models[0]
+        self.active_support_model = "substrate"
+=======
         if self.stack_count < 1 or self.stack_count > MAX_STACK_CHIP_COUNT:
             raise ValueError(
                 f"stack_count must be between 1 and {MAX_STACK_CHIP_COUNT}: "
                 f"{self.stack_count}"
             )
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
 
         self.publishers_by_axis = {
             axis: self.create_publisher(Float64, topic, 10)
@@ -181,6 +208,13 @@ class PoseCommandAdapter(Node):
                 10,
                 callback_group=self.feedback_group,
             )
+        self.active_stack_pair_subscription = self.create_subscription(
+            String,
+            "/robot/active_stack_pair",
+            self.handle_active_stack_pair,
+            10,
+            callback_group=self.feedback_group,
+        )
         self.create_subscription(
             Contacts,
             "/world/empty/model/substrate/link/substrate_link/"
@@ -194,7 +228,11 @@ class PoseCommandAdapter(Node):
             self.hold_current_target,
             callback_group=self.command_group,
         )
+<<<<<<< HEAD
+        self.chip_contact_subscriptions = [
+=======
         self.chip_contact_subscriptions = tuple(
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
             self.create_subscription(
                 Contacts,
                 f"/world/empty/model/{model_name}/link/chip_link/"
@@ -203,12 +241,18 @@ class PoseCommandAdapter(Node):
                 qos_profile_sensor_data,
                 callback_group=self.feedback_group,
             )
+<<<<<<< HEAD
+            for model_name in self.chip_models
+        ]
+=======
             for model_name in CHIP_MODEL_NAMES[:self.stack_count]
         )
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
 
         self.get_logger().info(
             f"listening on /robot/command_pose as {self.coordinate_frame} coordinates "
-            f"in {self.get_parameter('input_unit').value}"
+            f"in {self.get_parameter('input_unit').value}; "
+            f"stack_count={self.stack_count}"
         )
         if self.feedback_enabled:
             self.get_logger().info(
@@ -283,6 +327,46 @@ class PoseCommandAdapter(Node):
             picker_chip_model = None
             if (
                 any(token in first_name for token in PICKER_CONTACT_TOKENS)
+<<<<<<< HEAD
+                and self.collision_matches_model(
+                    second_name,
+                    self.active_chip_model,
+                )
+            ) or (
+                any(token in second_name for token in PICKER_CONTACT_TOKENS)
+                and self.collision_matches_model(
+                    first_name,
+                    self.active_chip_model,
+                )
+            )
+            direct_match = (
+                self.collision_matches_model(
+                    first_name,
+                    self.active_support_model,
+                )
+                and self.collision_matches_model(
+                    second_name,
+                    self.active_chip_model,
+                )
+            )
+            reverse_match = (
+                self.collision_matches_model(
+                    second_name,
+                    self.active_support_model,
+                )
+                and self.collision_matches_model(
+                    first_name,
+                    self.active_chip_model,
+                )
+            )
+            if picker_chip_match or direct_match or reverse_match:
+                contact_pair = tuple(sorted((first_name, second_name)))
+                now = time.monotonic()
+                with self.contact_lock:
+                    last_seen = self.placement_contact_last_seen.get(
+                        contact_pair,
+                        0.0,
+=======
                 and second_chip_model is not None
             ):
                 picker_chip_model = second_chip_model
@@ -326,6 +410,7 @@ class PoseCommandAdapter(Node):
                                 in (first_chip_model, second_chip_model)
                             )
                         )
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
                     )
                     if not active_placement_match:
                         continue
@@ -341,6 +426,47 @@ class PoseCommandAdapter(Node):
                     self.picker_contact_generation += 1
                 else:
                     self.substrate_contact_generation += 1
+
+    def handle_active_stack_pair(self, msg: String) -> None:
+        try:
+            support_model, chip_model = (
+                part.strip()
+                for part in msg.data.split("|", maxsplit=1)
+            )
+        except ValueError:
+            self.get_logger().warn(
+                f"invalid /robot/active_stack_pair payload: {msg.data}"
+            )
+            return
+        valid_supports = {"substrate", *self.chip_models}
+        if (
+            chip_model not in self.chip_models
+            or support_model not in valid_supports
+            or support_model == chip_model
+        ):
+            self.get_logger().warn(
+                f"unsupported active stack pair: {support_model}|{chip_model}"
+            )
+            return
+        self.active_support_model = support_model
+        self.active_chip_model = chip_model
+        self.get_logger().info(
+            f"active placement contact pair: {support_model}<->{chip_model}"
+        )
+
+    def collision_matches_model(
+        self,
+        collision_name: str,
+        model_name: str,
+    ) -> bool:
+        normalized = collision_name.lower()
+        if model_name == "substrate":
+            return any(
+                token in normalized
+                for token in SUBSTRATE_CONTACT_TOKENS
+            )
+        tokens = (f"{model_name}::", f"/model/{model_name}/")
+        return any(token in normalized for token in tokens)
 
     def get_picker_contact_generation(self) -> int:
         with self.contact_lock:

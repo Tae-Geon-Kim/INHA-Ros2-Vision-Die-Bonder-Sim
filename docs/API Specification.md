@@ -1,6 +1,6 @@
 # Backend API 상세 명세서
 
-작성 기준: `develop` 브랜치 `70ae8f4447f920084200f75c1c852dafeab842a9`  
+작성 기준: `develop` 브랜치 현재 구현
 대상 소스: `web_backend/main.py`, `web_backend/api/*`, `web_backend/schemas/*`, `web_backend/services/*`
 
 ## 1. 개요
@@ -95,9 +95,9 @@ Retry-After: 12
 | `GET` | `/robot-logs/errors` | 없음 | 로봇 에러 로그 목록 조회 |
 | `POST` | `/robot-logs/vision-align` | 없음 | 비전 정렬 로그 생성 |
 | `GET` | `/robot-logs/vision-align` | 없음 | 비전 정렬 로그 목록 조회 |
-| `GET` | `/robot-control/demo/status` | 없음 | 비전 적층 데모 실행 상태 조회 |
-| `POST` | `/robot-control/demo/start` | 없음 | 4~16개 비전 적층 데모 시작 |
-| `POST` | `/robot-control/demo/stop` | 없음 | 비전 적층 데모 중지 |
+| `GET` | `/robot-control/demo/status` | 없음 | Gazebo·bridge·데모 실행 상태 조회 |
+| `POST` | `/robot-control/demo/start` | 없음 | 선택한 4~16개 값으로 전체 시스템 시작 |
+| `POST` | `/robot-control/demo/stop` | 없음 | 웹에서 시작한 전체 시스템 중지 |
 
 ## 6. 공통 데이터 타입
 
@@ -695,21 +695,32 @@ Query:
 
 ## 10. Robot Control API
 
-로봇 제어 API는 FastAPI 서버 프로세스에서 ROS2 데모 명령을 별도 프로세스로 실행하거나 중지한다. 현재 구현상 인증은 적용되어 있지 않다.
+로봇 제어 API는 웹에서 받은 `stack_count` 하나를 Gazebo, joint bridge, 비전 적층 데모에 동일하게 적용하여 전체 시스템을 관리한다. 현재 구현상 인증은 적용되어 있지 않다.
 
-기본 실행 명령:
+Start의 기본 실행 순서는 다음과 같다.
 
-```bash
-make vision-stack-demo
-```
+1. `make gazebo-camera STACK_COUNT=<요청값>`
+2. Gazebo에서 로봇과 요청 개수만큼의 칩 모델이 준비될 때까지 대기
+3. `make joint-bridge STACK_COUNT=<요청값>`
+4. `make vision-stack-demo STACK_COUNT=<요청값>`
 
-환경변수 `ROBOT_DEMO_COMMAND`가 있으면 기본 명령 대신 해당 값을 사용한다. 요청의
-`stack_count`는 프로세스의 `STACK_COUNT` 환경변수로 전달되며 Makefile이
-`--stack-count` CLI 인자로 변환한다.
+각 명령은 다음 환경변수로 교체할 수 있다.
+
+| 환경변수 | 기본 명령 |
+| --- | --- |
+| `ROBOT_GAZEBO_COMMAND` | `make gazebo-camera` |
+| `ROBOT_JOINT_BRIDGE_COMMAND` | `make joint-bridge` |
+| `ROBOT_DEMO_COMMAND` | `make vision-stack-demo` |
+
+Gazebo 모델 준비 제한 시간은 `ROBOT_GAZEBO_READY_TIMEOUT_SEC`로 조정할 수 있으며 기본값은 60초다.
+
+세 프로세스에는 동일한 `STACK_COUNT`와 로컬 Gazebo Transport 설정이 전달된다. 웹 모드에서는 위 명령들을 터미널에서 별도로 실행하지 않는다. 수동으로 실행한 Gazebo, joint bridge 또는 비전 데모가 감지되면 중복 실행을 막기 위해 Start가 거부된다.
 
 로그 파일:
 
 ```text
+<PROJECT_ROOT>/log/web_gazebo.log
+<PROJECT_ROOT>/log/web_joint_bridge.log
 <PROJECT_ROOT>/log/robot_demo.log
 ```
 
@@ -731,19 +742,48 @@ GET /robot-control/demo/status
     "running": false,
     "pid": null,
     "returncode": null,
-    "command": "make vision-stack-demo",
-    "stack_count": 4
+    "command": "make vision-stack-demo STACK_COUNT=4",
+    "stack_count": 4,
+    "infrastructure_running": false,
+    "processes": {
+      "gazebo": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make gazebo-camera STACK_COUNT=4"
+      },
+      "joint_bridge": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make joint-bridge STACK_COUNT=4"
+      },
+      "demo": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make vision-stack-demo STACK_COUNT=4"
+      }
+    },
+    "log_paths": {
+      "gazebo": "/path/to/project/log/web_gazebo.log",
+      "joint_bridge": "/path/to/project/log/web_joint_bridge.log",
+      "demo": "/path/to/project/log/robot_demo.log"
+    }
   }
 }
 ```
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `running` | boolean | 데모 프로세스 실행 여부 |
+| `running` | boolean | 데모 프로세스 실행 여부. 기존 API 소비자를 위한 최상위 필드 |
 | `pid` | integer/null | 데모 프로세스 PID |
-| `returncode` | integer/null | 프로세스 종료 코드. 실행 중이면 `null` |
-| `command` | string | 실행에 사용할 데모 명령 |
-| `stack_count` | integer | 현재 또는 마지막 데모의 칩 적층 개수 |
+| `returncode` | integer/null | 데모 프로세스 종료 코드. 실행 중이거나 아직 시작하지 않았으면 `null` |
+| `command` | string | 데모 실행 명령 |
+| `stack_count` | integer | 현재 또는 마지막으로 요청한 칩 적층 개수 |
+| `infrastructure_running` | boolean | Gazebo와 joint bridge가 모두 실행 중인지 여부 |
+| `processes` | object | `gazebo`, `joint_bridge`, `demo` 각각의 `running`, `pid`, `returncode`, `command` |
+| `log_paths` | object | `gazebo`, `joint_bridge`, `demo` 로그의 절대 경로 |
 
 ### 10.2 데모 시작
 
@@ -769,24 +809,49 @@ POST /robot-control/demo/start
 
 성공 응답: `202 Accepted`
 
-데모가 실행 중이 아니면 새 프로세스를 시작한다.
+시스템이 실행 중이 아니면 요청한 `stack_count`로 Gazebo를 시작하고 모델 준비를 확인한 뒤, 같은 값으로 joint bridge와 비전 데모를 차례로 시작하여 상태를 반환한다.
 
 ```json
 {
   "success": true,
-  "message": "8개 칩 적층 데모를 시작했습니다.",
+  "message": "웹 설정값 8개로 Gazebo, joint bridge, 비전 적층 데모를 시작했습니다.",
   "data": {
     "running": true,
-    "pid": 12345,
+    "pid": 12347,
     "returncode": null,
-    "command": "make vision-stack-demo",
+    "command": "make vision-stack-demo STACK_COUNT=8",
     "stack_count": 8,
-    "log_path": "/path/to/project/log/robot_demo.log"
+    "infrastructure_running": true,
+    "processes": {
+      "gazebo": {
+        "running": true,
+        "pid": 12345,
+        "returncode": null,
+        "command": "make gazebo-camera STACK_COUNT=8"
+      },
+      "joint_bridge": {
+        "running": true,
+        "pid": 12346,
+        "returncode": null,
+        "command": "make joint-bridge STACK_COUNT=8"
+      },
+      "demo": {
+        "running": true,
+        "pid": 12347,
+        "returncode": null,
+        "command": "make vision-stack-demo STACK_COUNT=8"
+      }
+    },
+    "log_paths": {
+      "gazebo": "/path/to/project/log/web_gazebo.log",
+      "joint_bridge": "/path/to/project/log/web_joint_bridge.log",
+      "demo": "/path/to/project/log/robot_demo.log"
+    }
   }
 }
 ```
 
-이미 실행 중이면 새 프로세스를 만들지 않고 현재 상태를 반환한다. 이 경우에도 라우터의 상태 코드는 `202 Accepted`이다.
+같은 개수의 데모가 현재 실행 중이면 새 프로세스를 만들지 않고 현재 상태를 반환한다. 그 외에는 이전 데모가 완료되었더라도 칩이 이동한 월드를 재사용하지 않으며, 기존 데모, joint bridge, Gazebo를 종료한 뒤 요청한 값으로 전체 시스템을 자동 재시작한다. 두 경우 모두 상태 코드는 `202 Accepted`이다. 아래 예시는 중첩 필드를 생략한 축약 표현이다.
 
 ```json
 {
@@ -796,7 +861,7 @@ POST /robot-control/demo/start
     "running": true,
     "pid": 12345,
     "returncode": null,
-    "command": "make vision-stack-demo",
+    "command": "make vision-stack-demo STACK_COUNT=8",
     "stack_count": 8
   }
 }
@@ -807,8 +872,13 @@ POST /robot-control/demo/start
 | 상태 코드 | 조건 |
 | --- | --- |
 | `422` | `stack_count`가 4~16 범위를 벗어나거나 정수가 아님 |
-| `500` | 실행 명령의 첫 번째 실행 파일을 찾지 못함 |
-| `500` | OS 레벨 프로세스 시작 실패 |
+| `409` | 터미널에서 수동 실행한 Gazebo, joint bridge 또는 비전 데모가 감지됨 |
+| `500` | 실행 파일을 찾지 못했거나 OS 레벨 프로세스 시작에 실패함 |
+| `500` | Gazebo 또는 joint bridge가 준비 중 종료됨 |
+| `500` | 제한 시간 안에 요청한 개수의 Gazebo 모델을 확인하지 못함 |
+| `500` | 비전 적층 데모 프로세스가 시작 직후 종료됨 |
+
+Start 준비 과정에서 `500` 오류가 발생하면 API가 시작한 세 프로세스를 모두 정리한다. 오류 응답의 `detail`에는 `<PROJECT_ROOT>/log` 경로가 포함된다.
 
 ### 10.3 데모 중지
 
@@ -822,36 +892,86 @@ POST /robot-control/demo/stop
 
 성공 응답: `200 OK`
 
-실행 중인 프로세스가 있으면 프로세스 그룹에 `SIGTERM`을 보낸다.
+웹에서 실행한 프로세스가 있으면 데모 → joint bridge → Gazebo 순서로 각 프로세스 그룹을 종료한다. 먼저 `SIGINT`를 보내고 제한 시간 안에 끝나지 않으면 `SIGTERM`, 마지막으로 `SIGKILL`을 사용한다.
 
 ```json
 {
   "success": true,
-  "message": "비전 적층 데모 중지 신호를 보냈습니다.",
+  "message": "Gazebo, joint bridge, 비전 적층 데모를 모두 중지했습니다.",
   "data": {
-    "running": true,
-    "pid": 12345,
+    "running": false,
+    "pid": null,
     "returncode": null,
-    "command": "make vision-stack-demo",
-    "stack_count": 8
+    "command": "make vision-stack-demo STACK_COUNT=8",
+    "stack_count": 8,
+    "infrastructure_running": false,
+    "processes": {
+      "gazebo": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make gazebo-camera STACK_COUNT=8"
+      },
+      "joint_bridge": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make joint-bridge STACK_COUNT=8"
+      },
+      "demo": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make vision-stack-demo STACK_COUNT=8"
+      }
+    },
+    "log_paths": {
+      "gazebo": "/path/to/project/log/web_gazebo.log",
+      "joint_bridge": "/path/to/project/log/web_joint_bridge.log",
+      "demo": "/path/to/project/log/robot_demo.log"
+    }
   }
 }
 ```
 
-중지 신호 직후에는 프로세스가 아직 종료 처리 중일 수 있어 `running`이 일시적으로 `true`일 수 있다. 종료 반영 여부는 `GET /robot-control/demo/status`로 다시 확인한다.
-
-실행 중인 데모가 없으면:
+웹에서 실행한 시스템이 없으면:
 
 ```json
 {
   "success": true,
-  "message": "실행 중인 비전 적층 데모가 없습니다.",
+  "message": "웹에서 실행한 비전 적층 시스템이 없습니다.",
   "data": {
     "running": false,
-    "pid": 12345,
-    "returncode": 0,
-    "command": "make vision-stack-demo",
-    "stack_count": 4
+    "pid": null,
+    "returncode": null,
+    "command": "make vision-stack-demo STACK_COUNT=4",
+    "stack_count": 4,
+    "infrastructure_running": false,
+    "processes": {
+      "gazebo": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make gazebo-camera STACK_COUNT=4"
+      },
+      "joint_bridge": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make joint-bridge STACK_COUNT=4"
+      },
+      "demo": {
+        "running": false,
+        "pid": null,
+        "returncode": null,
+        "command": "make vision-stack-demo STACK_COUNT=4"
+      }
+    },
+    "log_paths": {
+      "gazebo": "/path/to/project/log/web_gazebo.log",
+      "joint_bridge": "/path/to/project/log/web_joint_bridge.log",
+      "demo": "/path/to/project/log/robot_demo.log"
+    }
   }
 }
 ```
@@ -897,6 +1017,7 @@ POST /robot-control/demo/stop
 - `POST /users/logout`만 access token 인증을 요구한다. 로그/제어 API 보호가 필요하면 `Depends(get_current_user)`를 라우터나 엔드포인트에 추가해야 한다.
 - 인증 토큰은 Authorization 헤더가 아니라 쿠키에서 읽는다. 프론트엔드 fetch는 `credentials: "include"`를 사용한다.
 - `POST /users/refresh`는 refresh token만 검증하고 DB 사용자 존재 여부를 확인한 뒤 새 access token을 발급한다.
-- `robot-control` 데모 프로세스 상태는 서버 메모리의 `_demo_process` 전역 변수에 의존한다. 서버가 재시작되면 기존 외부 프로세스와 상태가 동기화되지 않을 수 있다.
-- `robot-control`의 `start` API는 FastAPI 서버 실행 환경에서 ROS2 workspace가 source되어 있거나 기본 명령 내부 source 경로가 유효해야 한다.
-- `robot-control` API는 OS 프로세스를 실행하므로 운영 환경에서는 인증, 권한, 명령 allowlist, 실행 중복/종료 보장 정책을 추가하는 것이 안전하다.
+- `robot-control` 상태는 서버 메모리의 Gazebo, joint bridge, 데모 프로세스 객체에 의존한다. FastAPI가 정상 종료되면 lifespan 정리 단계에서 세 프로세스를 모두 종료한다.
+- 웹 모드에서는 Gazebo, joint bridge 또는 비전 데모를 터미널에서 먼저 실행하지 않는다. 수동 프로세스가 감지되면 Start는 `409 Conflict`를 반환한다.
+- `robot-control`의 Start API는 기본 Make target 안에서 ROS 2 workspace를 source한다. 명령을 환경변수로 교체할 경우 해당 명령이 필요한 ROS 환경을 직접 준비해야 한다.
+- `robot-control` API는 OS 프로세스를 실행하므로 운영 환경에서는 인증, 권한, 명령 allowlist 정책을 추가하는 것이 안전하다.

@@ -5,7 +5,8 @@ import {
   ClipboardList,
   Database,
   Play,
-  RefreshCw
+  RefreshCw,
+  Square,
 } from "lucide-react";
 import {
   Bar,
@@ -40,7 +41,10 @@ const PIE_COLORS = ["#267a4d", "#376d86", "#a46213", "#a83b3b", "#6b7280"];
 
 export default function Dashboard() {
   const [demoLoading, setDemoLoading] = useState(false);
+  const [demoStopping, setDemoStopping] = useState(false);
   const [demoMessage, setDemoMessage] = useState(null);
+  const [demoError, setDemoError] = useState(null);
+  const [demoStatus, setDemoStatus] = useState(null);
   const [stackDialogOpen, setStackDialogOpen] = useState(false);
   const [stackCount, setStackCount] = useState(DEFAULT_STACK_COUNT);
   const {
@@ -63,6 +67,26 @@ export default function Dashboard() {
   }, [refreshDashboard]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const refreshDemoStatus = async () => {
+      try {
+        const response = await robotControlApi.getDemoStatus();
+        if (!cancelled) setDemoStatus(response?.data || null);
+      } catch {
+        // The log dashboard can still be used while the simulator is offline.
+      }
+    };
+
+    refreshDemoStatus();
+    const statusTimer = window.setInterval(refreshDemoStatus, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(statusTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     if (unauthorized) {
       requireLogin(error || "로그인이 필요합니다.");
     }
@@ -73,18 +97,49 @@ export default function Dashboard() {
   const recentWork = useMemo(() => work.slice(0, 8), [work]);
   const latestErrors = useMemo(() => errors.slice(0, 8), [errors]);
 
-  const startGazeboDemo = async () => {
+  const simulatorRunning = Boolean(
+    demoStatus?.running
+      || demoStatus?.infrastructure_running
+      || Object.values(demoStatus?.processes || {}).some(
+        (process) => process?.running,
+      ),
+  );
+
+  const startVisionStackDemo = async () => {
     setDemoLoading(true);
     setDemoMessage(null);
+    setDemoError(null);
     try {
       const response = await robotControlApi.startDemo(stackCount);
-      setDemoMessage(response?.message || `${stackCount}-chip stack demo started.`);
+      setDemoStatus(response?.data || null);
+      setDemoMessage(
+        response?.message || `${stackCount}개 칩 적층 시스템을 시작했습니다.`,
+      );
       setStackDialogOpen(false);
       await refreshDashboard();
     } catch (requestError) {
-      setDemoMessage(requestError.message || "Vision stack demo start failed.");
+      setDemoError(
+        requestError.message || "비전 적층 시스템을 시작하지 못했습니다.",
+      );
     } finally {
       setDemoLoading(false);
+    }
+  };
+
+  const stopVisionStackDemo = async () => {
+    setDemoStopping(true);
+    setDemoMessage(null);
+    setDemoError(null);
+    try {
+      const response = await robotControlApi.stopDemo();
+      setDemoStatus(response?.data || null);
+      setDemoMessage(response?.message || "비전 적층 시스템을 중지했습니다.");
+    } catch (requestError) {
+      setDemoMessage(
+        requestError.message || "비전 적층 시스템을 중지하지 못했습니다.",
+      );
+    } finally {
+      setDemoStopping(false);
     }
   };
 
@@ -98,12 +153,24 @@ export default function Dashboard() {
           <div className="flex flex-wrap gap-2">
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-4 text-sm font-bold text-white disabled:opacity-60"
-              onClick={() => setStackDialogOpen(true)}
+              onClick={() => {
+                setDemoError(null);
+                setStackDialogOpen(true);
+              }}
               type="button"
-              disabled={demoLoading}
+              disabled={demoLoading || demoStopping}
             >
               <Play size={16} />
               Start
+            </button>
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-white px-4 text-sm font-bold text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={stopVisionStackDemo}
+              type="button"
+              disabled={!simulatorRunning || demoLoading || demoStopping}
+            >
+              <Square size={14} fill="currentColor" />
+              {demoStopping ? "Stopping..." : "Stop"}
             </button>
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md bg-moss px-4 text-sm font-bold text-white disabled:opacity-60"
@@ -131,10 +198,14 @@ export default function Dashboard() {
       ) : null}
 
       <StackSetupDialog
+        error={demoError}
         loading={demoLoading}
         onChange={setStackCount}
-        onClose={() => setStackDialogOpen(false)}
-        onStart={startGazeboDemo}
+        onClose={() => {
+          setDemoError(null);
+          setStackDialogOpen(false);
+        }}
+        onStart={startVisionStackDemo}
         open={stackDialogOpen}
         stackCount={stackCount}
       />

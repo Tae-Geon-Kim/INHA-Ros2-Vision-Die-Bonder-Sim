@@ -40,6 +40,48 @@ DEFAULT_STATE = {
     "chip_z": 0.0,
     "chip_theta_deg": 0.0,
 }
+MIN_STACK_COUNT = 4
+MAX_STACK_COUNT = 16
+
+
+def validate_stack_count(value):
+    try:
+        stack_count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'stack_count는 정수여야 합니다: {value}') from exc
+    if not MIN_STACK_COUNT <= stack_count <= MAX_STACK_COUNT:
+        raise ValueError(
+            f'stack_count는 {MIN_STACK_COUNT}~{MAX_STACK_COUNT} 범위여야 합니다: '
+            f'{stack_count}'
+        )
+    return stack_count
+
+
+def stack_count_arg(value):
+    try:
+        return validate_stack_count(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def chip_model_name(layer_number):
+    return 'check_chip' if layer_number == 1 else f'check_chip_{layer_number}'
+
+
+def chip_pick_specs():
+    """Return default pick poses in mm/deg, preserving the original first two."""
+    specs = [
+        (500.0, 400.0, 0.0),
+        (500.0, 0.0, 30.0),
+    ]
+    for x_mm in (500.0, 400.0, 300.0, 200.0):
+        for y_mm in (400.0, 200.0, 0.0, -200.0, -400.0):
+            if any((x_mm, y_mm) == spec[:2] for spec in specs):
+                continue
+            specs.append((x_mm, y_mm, 0.0))
+            if len(specs) == MAX_STACK_COUNT:
+                return specs
+    return specs
 
 
 def load_state():
@@ -140,6 +182,11 @@ class MainControllerNode(Node):
 
         # 로봇 하드웨어 명령 퍼블리셔 (Command topic: /robot/command_pose)
         self.cmd_pub = self.create_publisher(Pose, '/robot/command_pose', 10)
+        self.active_stack_pair_pub = self.create_publisher(
+            String,
+            '/robot/active_stack_pair',
+            10,
+        )
         
         # 그리퍼 중심점 기준 카메라의 상대 위치 오프셋
         self.GRIPPER_TO_CAMERA_DX = 50.0  
@@ -727,6 +774,10 @@ class MainControllerNode(Node):
             self.PLACEMENT_SUPPORT_TOKENS = self.model_collision_tokens(
                 normalized_support,
             )
+
+        pair_msg = String()
+        pair_msg.data = f'{self.PLACEMENT_SUPPORT_MODEL}|{self.RED_CHIP_MODEL}'
+        self.active_stack_pair_pub.publish(pair_msg)
 
         if log:
             self.get_logger().info(
@@ -3609,6 +3660,16 @@ class MainControllerNode(Node):
             self.get_logger().error(str(exc))
             return False
 
+        requested_count = (
+            self.STACK_COUNT
+            if stack_count is None
+            else validate_stack_count(stack_count)
+        )
+        if requested_count > len(self.CHIP_MODELS):
+            raise ValueError(
+                f'controller가 {len(self.CHIP_MODELS)}개 chip으로 초기화되어 '
+                f'{requested_count}개 적층을 실행할 수 없습니다.'
+            )
         chip_height = self.CHIP_REST_Z if chip_z is None else float(chip_z)
         target_place_x = self.SUBSTRATE_CENTER_X if place_x is None else float(place_x)
         target_place_y = self.SUBSTRATE_CENTER_Y if place_y is None else float(place_y)

@@ -18,10 +18,7 @@ def launch_setup(context):
         "/model/robot_system/joint/joint_z/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_theta/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model",
-        (
-            "/world/empty/pose/info@tf2_msgs/msg/TFMessage"
-            "[ignition.msgs.Pose_V"
-        ),
+        "/world/empty/pose/info@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V",
         (
             "/world/empty/model/robot_system/link/theta_link_1/sensor/"
             "picker_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
@@ -53,6 +50,7 @@ def launch_setup(context):
             executable="pose_command_adapter",
             name="pose_command_adapter",
             parameters=[{
+                "stack_count": stack_count,
                 "input_unit": "mm",
                 "coordinate_frame": "gripper_abs",
                 "steps": 180,
