@@ -41,7 +41,7 @@
           <collision>collision</collision>
         </contact>
         <always_on>1</always_on>
-        <update_rate>100</update_rate>
+        <update_rate>20</update_rate>
       </sensor>
       <visual name="visual">
         <geometry>

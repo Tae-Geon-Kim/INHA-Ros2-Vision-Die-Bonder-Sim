@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -23,6 +24,7 @@ GAZEBO_TRANSPORT_ENV = [
 ]
 
 
+<<<<<<< HEAD
 def chip_model_name(layer_number):
     return "check_chip" if layer_number == 1 else f"check_chip_{layer_number}"
 
@@ -60,13 +62,100 @@ def parse_stack_count(context):
 
 def launch_setup(context):
     stack_count = parse_stack_count(context)
+=======
+def spawn_stack_chips(context, check_chip_sdf):
+    stack_count = int(LaunchConfiguration("stack_count").perform(context))
+    if stack_count < 1 or stack_count > 16:
+        raise RuntimeError(f"stack_count must be between 1 and 16: {stack_count}")
+
+    actions = []
+    for chip_offset in range(stack_count):
+        ratio = 0.0 if stack_count == 1 else chip_offset / (stack_count - 1)
+        chip_index = chip_offset + 1
+        model_name = "check_chip" if chip_index == 1 else f"check_chip_{chip_index}"
+        y_m = 0.4 + ratio * (-0.4 - 0.4)
+        theta_rad = math.radians(45.0 * ratio)
+        actions.append(
+            TimerAction(
+                period=7.0 + 0.4 * chip_offset,
+                actions=[
+                    ExecuteProcess(
+                        cmd=[
+                            "ros2",
+                            "run",
+                            "ros_gz_sim",
+                            "create",
+                            "-file",
+                            check_chip_sdf,
+                            "-name",
+                            model_name,
+                            "-x",
+                            "0.5",
+                            "-y",
+                            f"{y_m:.9f}",
+                            "-z",
+                            "0.05005",
+                            "-Y",
+                            f"{theta_rad:.12f}",
+                        ],
+                        output="screen",
+                    ),
+                ],
+            )
+        )
+    return actions
+
+
+def generate_launch_description():
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
     pkg_share = Path(get_package_share_directory("robot_system_description"))
     install_share = str(pkg_share.parent)
     robot_urdf = str(pkg_share / "urdf" / "robot_system_compiled.urdf")
     check_chip_sdf = str(pkg_share / "models" / "red_check_chip" / "model.sdf")
     world_sdf = str(pkg_share / "worlds" / "empty_with_sensors.sdf")
+    render_engine = LaunchConfiguration("render_engine")
 
+<<<<<<< HEAD
     actions = [
+=======
+    gazebo = ExecuteProcess(
+        cmd=[
+            "ign",
+            "gazebo",
+            "-r",
+            "--render-engine",
+            render_engine,
+            world_sdf,
+        ],
+        output="screen",
+    )
+
+    spawn_robot = TimerAction(
+        period=4.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    "ros2",
+                    "run",
+                    "ros_gz_sim",
+                    "create",
+                    "-file",
+                    robot_urdf,
+                    "-name",
+                    "robot_system",
+                    "-z",
+                    "0.0",
+                ],
+                output="screen",
+            ),
+        ],
+    )
+
+    return LaunchDescription([
+        DeclareLaunchArgument("stack_count", default_value="4"),
+        DeclareLaunchArgument("render_engine", default_value="ogre"),
+        *GAZEBO_TRANSPORT_ENV,
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
         SetEnvironmentVariable(
             name="IGN_GAZEBO_RESOURCE_PATH",
             value=install_share,
@@ -75,6 +164,7 @@ def launch_setup(context):
             name="GZ_SIM_RESOURCE_PATH",
             value=install_share,
         ),
+<<<<<<< HEAD
         ExecuteProcess(
             cmd=["ign", "gazebo", "-r", world_sdf],
             output="screen",
@@ -146,4 +236,12 @@ def generate_launch_description():
             description="Number of check-chip models to spawn (4-16).",
         ),
         OpaqueFunction(function=launch_setup),
+=======
+        gazebo,
+        spawn_robot,
+        OpaqueFunction(
+            function=spawn_stack_chips,
+            args=[check_chip_sdf],
+        ),
+>>>>>>> 3c31057c254a8a9236fc22791a723a9469e4273f
     ])

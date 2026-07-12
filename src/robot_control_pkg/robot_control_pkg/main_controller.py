@@ -4,6 +4,7 @@ import math
 import os
 from pathlib import Path
 import re
+import statistics
 import subprocess
 import time
 
@@ -26,6 +27,8 @@ DEFAULT_SUBSTRATE_CENTER_Y_M = 0.0
 DEFAULT_GRIPPER_HOME_X_MM = DEFAULT_SUBSTRATE_CENTER_X_M * 1000.0
 DEFAULT_GRIPPER_HOME_Y_MM = DEFAULT_SUBSTRATE_CENTER_Y_M * 1000.0
 DEFAULT_GRIPPER_HOME_Z_MM = 165.0
+DEFAULT_STACK_CHIP_COUNT = 4
+MAX_STACK_CHIP_COUNT = 16
 DEFAULT_STATE = {
     "x": DEFAULT_GRIPPER_HOME_X_MM,
     "y": DEFAULT_GRIPPER_HOME_Y_MM,
@@ -163,18 +166,19 @@ def env_flag(name, default=False):
 
 
 class MainControllerNode(Node):
-    def __init__(self, stack_count=None):
+    def __init__(self, stack_chip_count=2):
         super().__init__('main_controller_node')
 
-        configured_stack_count = (
-            os.environ.get(
-                'ROBOT_CONTROL_STACK_COUNT',
-                os.environ.get('STACK_COUNT', MIN_STACK_COUNT),
+        configured_stack_chip_count = int(stack_chip_count)
+        if (
+            configured_stack_chip_count < 2
+            or configured_stack_chip_count > MAX_STACK_CHIP_COUNT
+        ):
+            raise ValueError(
+                f'stack_chip_count는 2~{MAX_STACK_CHIP_COUNT} 범위여야 합니다: '
+                f'{configured_stack_chip_count}'
             )
-            if stack_count is None
-            else stack_count
-        )
-        self.STACK_COUNT = validate_stack_count(configured_stack_count)
+        self.STACK_CHIP_COUNT = configured_stack_chip_count
 
         # 로봇 하드웨어 명령 퍼블리셔 (Command topic: /robot/command_pose)
         self.cmd_pub = self.create_publisher(Pose, '/robot/command_pose', 10)
@@ -242,15 +246,15 @@ class MainControllerNode(Node):
         self.MOVE_SETTLE_SEC = 3.5
         self.CONTACT_APPROACH_OFFSET_MM = float(os.environ.get(
             "ROBOT_CONTROL_CONTACT_APPROACH_OFFSET_MM",
-            "0.5",
+            "0.2",
         ))
         self.CONTACT_DESCENT_STEP_MM = float(os.environ.get(
             "ROBOT_CONTROL_CONTACT_DESCENT_STEP_MM",
-            "0.1",
+            "0.02",
         ))
         self.CONTACT_PROBE_DEPTH_MM = float(os.environ.get(
             "ROBOT_CONTROL_CONTACT_PROBE_DEPTH_MM",
-            "0.1",
+            "0.04",
         ))
         self.CONTACT_FLOOR_TOLERANCE_MM = float(os.environ.get(
             "ROBOT_CONTROL_CONTACT_FLOOR_TOLERANCE_MM",
@@ -294,13 +298,11 @@ class MainControllerNode(Node):
         chip_models = [self.PRIMARY_CHIP_MODEL, self.SECOND_CHIP_MODEL]
         chip_models.extend(
             os.environ.get(
-                f"ROBOT_CONTROL_CHIP_{index}_MODEL",
-                chip_model_name(index),
+                f"ROBOT_CONTROL_CHIP_{chip_index}_MODEL",
+                f"check_chip_{chip_index}",
             )
-            for index in range(3, self.STACK_COUNT + 1)
+            for chip_index in range(3, self.STACK_CHIP_COUNT + 1)
         )
-        if len(set(chip_models)) != len(chip_models):
-            raise ValueError(f"chip model 이름은 서로 달라야 합니다: {chip_models}")
         self.CHIP_MODELS = tuple(chip_models)
         self.RED_CHIP_MODEL = self.PRIMARY_CHIP_MODEL
         self.USE_DETACHABLE_JOINT = env_flag("ROBOT_CONTROL_USE_DETACHABLE_JOINT", True)
@@ -323,8 +325,8 @@ class MainControllerNode(Node):
         )
         self.VACUUM_JOINT_TOPICS = {}
         self.STACK_BOND_TOPICS = {}
-        for index, model_name in enumerate(self.CHIP_MODELS, start=1):
-            if index == 1:
+        for chip_index, model_name in enumerate(self.CHIP_MODELS, start=1):
+            if chip_index == 1:
                 vacuum_topics = {
                     "attach": primary_attach_topic,
                     "detach": primary_detach_topic,
@@ -335,7 +337,7 @@ class MainControllerNode(Node):
                     "detach": primary_bond_detach_topic,
                     "state": "/model/robot_system/substrate_bond/state",
                 }
-            elif index == 2:
+            elif chip_index == 2:
                 vacuum_topics = {
                     "attach": os.environ.get(
                         "ROBOT_CONTROL_SECOND_ATTACH_TOPIC",
@@ -365,35 +367,35 @@ class MainControllerNode(Node):
                     ),
                 }
             else:
-                env_prefix = f"ROBOT_CONTROL_CHIP_{index}"
-                vacuum_prefix = f"/model/robot_system/vacuum_{index}"
-                bond_prefix = f"/model/robot_system/stack_bond_{index}"
+                env_prefix = f"ROBOT_CONTROL_CHIP_{chip_index}"
+                vacuum_base = f"/model/robot_system/vacuum_{chip_index}"
+                bond_base = f"/model/robot_system/stack_bond_{chip_index}"
                 vacuum_topics = {
                     "attach": os.environ.get(
                         f"{env_prefix}_ATTACH_TOPIC",
-                        f"{vacuum_prefix}/attach",
+                        f"{vacuum_base}/attach",
                     ),
                     "detach": os.environ.get(
                         f"{env_prefix}_DETACH_TOPIC",
-                        f"{vacuum_prefix}/detach",
+                        f"{vacuum_base}/detach",
                     ),
                     "state": os.environ.get(
                         f"{env_prefix}_VACUUM_STATE_TOPIC",
-                        f"{vacuum_prefix}/state",
+                        f"{vacuum_base}/state",
                     ),
                 }
                 bond_topics = {
                     "attach": os.environ.get(
                         f"{env_prefix}_BOND_ATTACH_TOPIC",
-                        f"{bond_prefix}/attach",
+                        f"{bond_base}/attach",
                     ),
                     "detach": os.environ.get(
                         f"{env_prefix}_BOND_DETACH_TOPIC",
-                        f"{bond_prefix}/detach",
+                        f"{bond_base}/detach",
                     ),
                     "state": os.environ.get(
                         f"{env_prefix}_BOND_STATE_TOPIC",
-                        f"{bond_prefix}/state",
+                        f"{bond_base}/state",
                     ),
                 }
             self.VACUUM_JOINT_TOPICS[model_name] = vacuum_topics
@@ -515,9 +517,9 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_TRANSFER_RELEASE_TIMEOUT_SEC",
             "10.0",
         ))
-        self.TRANSFER_MAX_CHIP_DRIFT_MM = float(os.environ.get(
-            "ROBOT_CONTROL_TRANSFER_MAX_CHIP_DRIFT_MM",
-            "0.2",
+        self.TRANSFER_MAX_STACK_Z_ERROR_MM = float(os.environ.get(
+            "ROBOT_CONTROL_TRANSFER_MAX_STACK_Z_ERROR_MM",
+            str(self.CHIP_THICKNESS_MM * 0.5),
         ))
         self.TRANSFER_DETACH_RETRY_SEC = float(os.environ.get(
             "ROBOT_CONTROL_TRANSFER_DETACH_RETRY_SEC",
@@ -555,7 +557,8 @@ class MainControllerNode(Node):
         self.CHIP_SERVICE_TIMEOUT_MS = int(os.environ.get("ROBOT_CONTROL_CHIP_SERVICE_TIMEOUT_MS", "1000"))
         self.COMMAND_LIMITS_MM = {
             "x": (-260.0, 540.0),
-            "y": (-400.0, 400.0),
+            # Source endpoints are +/-400 mm; retain 5 mm for vision servoing.
+            "y": (-405.0, 405.0),
             "z": (self.GRIPPER_HOME_Z - 115.0, self.GRIPPER_HOME_Z + 115.0),
         }
 
@@ -572,6 +575,10 @@ class MainControllerNode(Node):
             "ROBOT_CONTROL_VISION_REQUEST_TIMEOUT_SEC",
             "20.0",
         ))
+        self.VISION_REQUEST_RETRY_COUNT = max(1, int(os.environ.get(
+            "ROBOT_CONTROL_VISION_REQUEST_RETRY_COUNT",
+            "3",
+        )))
         self.VISION_TOLERANCE_UM = float(os.environ.get(
             "ROBOT_CONTROL_VISION_TOLERANCE_UM",
             "1.0",
@@ -618,7 +625,7 @@ class MainControllerNode(Node):
         ))
         self.VISION_MICRO_AVERAGE_WINDOW = max(1, int(os.environ.get(
             "ROBOT_CONTROL_VISION_MICRO_AVERAGE_WINDOW",
-            "4",
+            "5",
         )))
         self.VISION_MOTION_TIMEOUT_SEC = float(os.environ.get(
             "ROBOT_CONTROL_VISION_MOTION_TIMEOUT_SEC",
@@ -634,7 +641,7 @@ class MainControllerNode(Node):
         ))
         self.VISION_MOTION_POSITION_TOLERANCE_MM = float(os.environ.get(
             "ROBOT_CONTROL_VISION_MOTION_POSITION_TOLERANCE_MM",
-            "0.01",
+            "0.0005",
         ))
         self.VISION_MOTION_Z_TOLERANCE_MM = float(os.environ.get(
             "ROBOT_CONTROL_VISION_MOTION_Z_TOLERANCE_MM",
@@ -1349,6 +1356,26 @@ class MainControllerNode(Node):
         )
         return False
 
+    def confirm_contact_at_z_floor(self, contact_wait_fn, contact_name):
+        self.get_logger().info(
+            f'{contact_name}: Z 안전 한계에서 추가 하강 없이 '
+            'contact sensor를 한 번 더 확인합니다.'
+        )
+        if not contact_wait_fn(
+            timeout_sec=max(0.25, self.CONTACT_DESCENT_CHECK_TIMEOUT_SEC),
+        ):
+            return False
+
+        contact_z = self.actual_gripper_z_mm
+        self.get_logger().info(
+            f'{contact_name}: 지연 도착한 contact 감지, 현재 Z에서 정지'
+        )
+        if contact_z is not None:
+            self.get_logger().info(
+                f'{contact_name}: 실제 gripper z={contact_z:.3f}mm'
+            )
+        return True
+
     def descend_until_contact(
         self,
         x_mm,
@@ -1398,6 +1425,8 @@ class MainControllerNode(Node):
             return True
 
         if self.actual_z_below_contact_floor(contact_floor_z):
+            if self.confirm_contact_at_z_floor(contact_wait_fn, contact_name):
+                return True
             self.recover_from_z_floor_violation(x_mm, y_mm, approach_z, theta_deg)
             return False
 
@@ -1434,6 +1463,8 @@ class MainControllerNode(Node):
                 return True
 
             if self.actual_z_below_contact_floor(contact_floor_z):
+                if self.confirm_contact_at_z_floor(contact_wait_fn, contact_name):
+                    return True
                 self.recover_from_z_floor_violation(x_mm, y_mm, approach_z, theta_deg)
                 return False
 
@@ -1762,11 +1793,17 @@ class MainControllerNode(Node):
         )
 
     def record_carried_chip_offset(self, chip_bottom_z_mm):
-        gripper_z = self.picker_contact_gripper_z_mm
-        source = "contact feedback"
-        if gripper_z is None:
+        self.spin_callbacks(0.05)
+        gripper_z = None
+        source = "post-attach joint feedback"
+        if (
+            self.actual_gripper_z_mm is not None
+            and time.monotonic() - self.last_joint_feedback_time <= 1.0
+        ):
             gripper_z = self.actual_gripper_z_mm
-            source = "joint feedback"
+        elif self.picker_contact_gripper_z_mm is not None:
+            gripper_z = self.picker_contact_gripper_z_mm
+            source = "contact feedback fallback"
         if gripper_z is None:
             gripper_z = self.last_sent_z
             source = "command fallback"
@@ -1920,6 +1957,38 @@ class MainControllerNode(Node):
             theta_deg=theta_deg,
         )
 
+    def wait_for_red_chip_pose_abs(
+        self,
+        x_mm,
+        y_mm,
+        z_mm,
+        theta_deg,
+        timeout_sec=1.0,
+    ):
+        target_x_m, target_y_m, target_z_m = self.absolute_to_world(
+            x_mm,
+            y_mm,
+            self.chip_bottom_to_center_z(z_mm),
+        )
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        while time.monotonic() < deadline:
+            self.spin_callbacks(min(0.02, deadline - time.monotonic()))
+            pose = self.sim_model_poses.get(self.RED_CHIP_MODEL)
+            if pose is None:
+                continue
+            theta_error_deg = math.degrees(math.atan2(
+                math.sin(math.radians(pose['theta_deg'] - float(theta_deg))),
+                math.cos(math.radians(pose['theta_deg'] - float(theta_deg))),
+            ))
+            if (
+                abs(pose['x_m'] - target_x_m) <= 0.0005
+                and abs(pose['y_m'] - target_y_m) <= 0.0005
+                and abs(pose['z_m'] - target_z_m) <= 0.0001
+                and abs(theta_error_deg) <= 0.1
+            ):
+                return True
+        return False
+
     def place_red_chip(self, x_mm, y_mm, theta_deg=0.0):
         return self.set_red_chip_pose_abs(
             x_mm,
@@ -1942,6 +2011,7 @@ class MainControllerNode(Node):
         y_mm=400.0,
         z_mm=None,
         theta_deg=0.0,
+        verify_pose=False,
     ):
         chip_z = self.CHIP_REST_Z if z_mm is None else float(z_mm)
         self.force_vacuum_detached('chip_reset 전에 기존 detachable joint를 해제')
@@ -1950,13 +2020,40 @@ class MainControllerNode(Node):
             f'{self.RED_CHIP_MODEL}을 절대좌표 '
             f'({x_mm}, {y_mm}, {chip_z})mm, theta={float(theta_deg):.3f}deg에 배치합니다.'
         )
-        self.set_red_chip_pose_abs(
-            x_mm,
-            y_mm,
-            chip_z,
-            theta_deg=theta_deg,
-        )
+        attempts = 3 if verify_pose else 1
+        for attempt in range(1, attempts + 1):
+            pose_updated = self.set_red_chip_pose_abs(
+                x_mm,
+                y_mm,
+                chip_z,
+                theta_deg=theta_deg,
+            )
+            pose_verified = (
+                not verify_pose
+                or (
+                    pose_updated
+                    and self.wait_for_red_chip_pose_abs(
+                        x_mm,
+                        y_mm,
+                        chip_z,
+                        theta_deg,
+                    )
+                )
+            )
+            if pose_updated and pose_verified:
+                self.save_current_state()
+                return True
+            if attempt >= attempts:
+                break
+            self.get_logger().warn(
+                f'{self.RED_CHIP_MODEL} 공급 위치 확인 실패: '
+                f'detach/set_pose 재시도 {attempt + 1}/{attempts}'
+            )
+            self.force_vacuum_detached('chip pose 재시도 전 picker 고정 해제')
+            self.force_substrate_bond_detached('chip pose 재시도 전 stack bond 해제')
+
         self.save_current_state()
+        return False
 
     # 거시 카메라를 칩 중앙에 정렬
     def set_camera_center(self, chip_x, chip_y):
@@ -2244,7 +2341,7 @@ class MainControllerNode(Node):
     def transfer_chip_to_substrate(self, x_mm, y_mm, theta_deg=0.0):
         self.get_logger().info(
             'stack transfer: 현재 접촉 위치에서 '
-            f'picker를 먼저 해제·분리한 뒤 {self.RED_CHIP_MODEL}을 적층 고정합니다.'
+            f'{self.RED_CHIP_MODEL}을 받침에 먼저 고정한 뒤 picker를 해제합니다.'
         )
 
         self.spin_callbacks(0.05)
@@ -2253,12 +2350,14 @@ class MainControllerNode(Node):
             if self.actual_gripper_z_mm is not None
             else self.last_sent_z
         )
-        chip_pose_before = self.sim_model_poses.get(self.RED_CHIP_MODEL)
-        chip_z_before_m = (
-            None if chip_pose_before is None else float(chip_pose_before['z_m'])
-        )
+        if not self.substrate_bond_on():
+            return False
 
+        self.get_logger().info(
+            'stack transfer: 적층 bond 생성 완료, picker vacuum을 해제합니다.'
+        )
         if self.vacuum_attached and not self.vacuum_off():
+            self.detach_chip_from_substrate()
             return False
 
         release_z = min(
@@ -2276,8 +2375,8 @@ class MainControllerNode(Node):
         deadline = time.monotonic() + self.TRANSFER_RELEASE_TIMEOUT_SEC
         next_detach_retry = time.monotonic() + self.TRANSFER_DETACH_RETRY_SEC
         gripper_separated = False
-        chip_stable = chip_z_before_m is None
-        chip_drift_mm = None
+        stack_height_valid = False
+        stack_z_error_mm = None
         while time.monotonic() < deadline:
             self.spin_callbacks(min(0.02, deadline - time.monotonic()))
             if self.actual_gripper_z_mm is not None:
@@ -2287,16 +2386,31 @@ class MainControllerNode(Node):
                 )
 
             chip_pose_now = self.sim_model_poses.get(self.RED_CHIP_MODEL)
-            if chip_z_before_m is not None and chip_pose_now is not None:
-                chip_drift_mm = abs(
-                    float(chip_pose_now['z_m']) - chip_z_before_m
+            support_pose_now = self.sim_model_poses.get(
+                self.PLACEMENT_SUPPORT_MODEL,
+            )
+            if chip_pose_now is not None and support_pose_now is not None:
+                expected_center_gap_mm = (
+                    self.SUBSTRATE_THICKNESS_MM / 2.0
+                    + self.CHIP_THICKNESS_MM / 2.0
+                    if self.PLACEMENT_SUPPORT_MODEL == self.SUBSTRATE_MODEL
+                    else self.CHIP_THICKNESS_MM
+                )
+                actual_center_gap_mm = (
+                    float(chip_pose_now['z_m'])
+                    - float(support_pose_now['z_m'])
                 ) * 1000.0
-                chip_stable = chip_drift_mm <= self.TRANSFER_MAX_CHIP_DRIFT_MM
+                stack_z_error_mm = abs(
+                    actual_center_gap_mm - expected_center_gap_mm
+                )
+                stack_height_valid = (
+                    stack_z_error_mm <= self.TRANSFER_MAX_STACK_Z_ERROR_MM
+                )
 
-            if gripper_separated and chip_stable:
+            if gripper_separated and stack_height_valid:
                 break
 
-            if time.monotonic() >= next_detach_retry:
+            if not gripper_separated and time.monotonic() >= next_detach_retry:
                 self.get_logger().warn(
                     'stack transfer: picker 분리가 아직 확인되지 않아 detach를 재요청합니다.'
                 )
@@ -2305,26 +2419,25 @@ class MainControllerNode(Node):
                     time.monotonic() + self.TRANSFER_DETACH_RETRY_SEC
                 )
 
-        if not gripper_separated or not chip_stable:
-            drift_text = (
-                'unavailable' if chip_drift_mm is None else f'{chip_drift_mm:.3f}mm'
+        if not gripper_separated or not stack_height_valid:
+            stack_error_text = (
+                'unavailable'
+                if stack_z_error_mm is None
+                else f'{stack_z_error_mm:.3f}mm'
             )
             self.get_logger().error(
-                'stack transfer 중단: picker-chip 실제 분리를 확인하지 못했습니다. '
-                f'gripper_separated={gripper_separated}, chip_z_drift={drift_text}'
+                'stack transfer 중단: 분리 또는 적층 높이 검증에 실패했습니다. '
+                f'gripper_separated={gripper_separated}, '
+                f'support_z_error={stack_error_text}'
             )
             return False
 
         self.get_logger().info(
-            'stack transfer: 실제 분리 확인 완료 '
+            'stack transfer: bond 유지 및 picker 실제 분리 확인 완료 '
             f'(gripper 상승={self.actual_gripper_z_mm - contact_gripper_z:.3f}mm, '
-            f'chip_z_drift={0.0 if chip_drift_mm is None else chip_drift_mm:.3f}mm)'
+            f'support_z_error='
+            f'{0.0 if stack_z_error_mm is None else stack_z_error_mm:.3f}mm)'
         )
-
-        # 접촉은 하강 단계에서 이미 검증됐고, 분리 후 칩은 받침 위에 그대로 있다.
-        # 이 순서로 생성해야 picker와 받침의 fixed joint가 동시에 생기지 않는다.
-        if not self.attach_chip_to_substrate(require_contact=False):
-            return False
 
         self.save_current_state()
         return True
@@ -2377,6 +2490,21 @@ class MainControllerNode(Node):
             f'비전 요청 응답 시간 초과: id={request_id}, '
             f'action={request.get("action")}, stage={request.get("stage", "-")}'
         )
+        return None
+
+    def request_vision_with_retries(self, payload):
+        for attempt in range(1, self.VISION_REQUEST_RETRY_COUNT + 1):
+            result = self.request_vision(payload)
+            if result is not None:
+                return result
+            if attempt >= self.VISION_REQUEST_RETRY_COUNT:
+                break
+            self.get_logger().warn(
+                f'비전 요청 재시도 {attempt + 1}/'
+                f'{self.VISION_REQUEST_RETRY_COUNT}: '
+                f'action={payload.get("action")}, stage={payload.get("stage", "-")}'
+            )
+            self.wait_for_motion(0.25)
         return None
 
     def lock_vision_reference_chip(self, reference_set):
@@ -2598,18 +2726,35 @@ class MainControllerNode(Node):
             and theta_edge_um <= self.VISION_TOLERANCE_UM
         )
 
+    def vision_xy_theta_within_tolerance(self, result):
+        xy_um, _, theta_edge_um = self.vision_error_metrics(result)
+        return (
+            xy_um <= self.VISION_TOLERANCE_UM
+            and theta_edge_um <= self.VISION_TOLERANCE_UM
+        )
+
     def log_vision_result(self, label, result):
         xy_um, optical_z_um, theta_edge_um = self.vision_error_metrics(result)
         joint_z_um = self.alignment_joint_z_error_um()
+        raw_z_text = ""
+        if "raw_dz" in result:
+            raw_z_text = (
+                f'raw_dz={float(result["raw_dz"]):+.6f}mm, '
+                f'optical_z_bias={float(result.get("optical_z_bias", 0.0)):+.6f}mm, '
+            )
         self.get_logger().info(
             f'{label} [VISION_ESTIMATE][USED_FOR_ALIGNMENT]: '
             f'dx={float(result["dx"]):+.6f}mm, '
             f'dy={float(result["dy"]):+.6f}mm, '
             f'dz={float(result["dz"]):+.6f}mm, '
             f'dtheta={float(result["dtheta"]):+.6f}deg, '
+            f'{raw_z_text}'
             f'max_xy={xy_um:.3f}um, abs_z={optical_z_um:.3f}um, '
             f'theta_edge={theta_edge_um:.3f}um, '
-            f'score={float(result.get("score", 0.0)):.4f}'
+            f'score={float(result.get("score", 0.0)):.4f}, '
+            f'feature={result.get("alignment_feature", "unspecified")}, '
+            f'reference={result.get("reference_set_used", result.get("reference_set", "-"))}, '
+            f'source={result.get("source", "vision")}'
         )
         self.get_logger().info(
             f'{label} [SIM_JOINT_MONITOR][NOT_ALIGNMENT_ERROR]: '
@@ -2629,9 +2774,13 @@ class MainControllerNode(Node):
             return None
         return result
 
-    def wait_for_fresh_sim_model_poses(self, timeout_sec=5.0):
+    def wait_for_fresh_sim_model_poses(self, timeout_sec=5.0, model_names=None):
         requested_at = time.monotonic()
-        required_models = (self.RED_CHIP_MODEL, self.SUBSTRATE_MODEL)
+        required_models = tuple(
+            (self.RED_CHIP_MODEL, self.SUBSTRATE_MODEL)
+            if model_names is None
+            else model_names
+        )
         deadline = requested_at + max(0.0, float(timeout_sec))
         while time.monotonic() < deadline:
             self.spin_callbacks(min(0.05, deadline - time.monotonic()))
@@ -2654,11 +2803,21 @@ class MainControllerNode(Node):
         )
         return False
 
-    def simulation_placement_ground_truth(self):
-        if not self.wait_for_fresh_sim_model_poses():
+    def simulation_chip_substrate_ground_truth(
+        self,
+        chip_model,
+        stack_level,
+        wait_for_fresh=True,
+    ):
+        required_models = (str(chip_model), self.SUBSTRATE_MODEL)
+        if wait_for_fresh and not self.wait_for_fresh_sim_model_poses(
+            model_names=required_models,
+        ):
+            return None
+        if any(model not in self.sim_model_poses for model in required_models):
             return None
 
-        chip_pose = self.sim_model_poses[self.RED_CHIP_MODEL]
+        chip_pose = self.sim_model_poses[str(chip_model)]
         substrate_pose = self.sim_model_poses[self.SUBSTRATE_MODEL]
         delta_x_m = chip_pose['x_m'] - substrate_pose['x_m']
         delta_y_m = chip_pose['y_m'] - substrate_pose['y_m']
@@ -2669,7 +2828,7 @@ class MainControllerNode(Node):
         local_y_m = -sin_yaw * delta_x_m + cos_yaw * delta_y_m
         expected_center_delta_z_m = (
             self.SUBSTRATE_THICKNESS_MM / 2.0
-            + (self.active_stack_level + 0.5) * self.CHIP_THICKNESS_MM
+            + (int(stack_level) + 0.5) * self.CHIP_THICKNESS_MM
         ) * 0.001
         theta_error_deg = chip_pose['theta_deg'] - substrate_pose['theta_deg']
         theta_error_deg = math.degrees(math.atan2(
@@ -2689,6 +2848,82 @@ class MainControllerNode(Node):
             'chip_frame': chip_pose['frame_name'],
             'substrate_frame': substrate_pose['frame_name'],
         }
+
+    def simulation_placement_ground_truth(self):
+        return self.simulation_chip_substrate_ground_truth(
+            self.RED_CHIP_MODEL,
+            self.active_stack_level,
+        )
+
+    def log_stack_absolute_errors(self, chip_specs):
+        required_models = [
+            self.SUBSTRATE_MODEL,
+            *(spec['model'] for spec in chip_specs),
+        ]
+        self.get_logger().info(
+            '[STACK_ABSOLUTE_ERROR_SUMMARY][SIM_GROUND_TRUTH] '
+            f'substrate={self.SUBSTRATE_MODEL}, chips={len(chip_specs)}, '
+            'reference=substrate_pose, usage=REPORT_ONLY_NOT_CONTROL'
+        )
+        if not self.wait_for_fresh_sim_model_poses(
+            timeout_sec=5.0,
+            model_names=required_models,
+        ):
+            self.get_logger().warn(
+                '[STACK_ABSOLUTE_ERROR_SUMMARY][SIM_GROUND_TRUTH] unavailable'
+            )
+            return
+
+        results = []
+        for spec in chip_specs:
+            result = self.simulation_chip_substrate_ground_truth(
+                spec['model'],
+                spec['stack_level'],
+                wait_for_fresh=False,
+            )
+            if result is None:
+                self.get_logger().warn(
+                    '[STACK_ABSOLUTE_ERROR][SIM_GROUND_TRUTH] '
+                    f'chip={spec["index"]}, model={spec["model"]}, unavailable'
+                )
+                continue
+
+            dx_um = float(result['dx']) * 1000.0
+            dy_um = float(result['dy']) * 1000.0
+            dz_um = float(result['dz']) * 1000.0
+            dtheta_deg = float(result['dtheta'])
+            xy_um = math.hypot(dx_um, dy_um)
+            theta_edge_um = (
+                abs(math.radians(dtheta_deg))
+                * self.VISION_ROTATION_RADIUS_MM
+                * 1000.0
+            )
+            results.append((xy_um, dz_um, dtheta_deg))
+            self.get_logger().info(
+                '[STACK_ABSOLUTE_ERROR][SIM_GROUND_TRUTH][SUBSTRATE_REFERENCE]: '
+                f'chip={spec["index"]}, model={spec["model"]}, '
+                f'layer={spec["stack_level"] + 1}, '
+                f'dx={dx_um:+.3f}um, dy={dy_um:+.3f}um, '
+                f'xy_abs={xy_um:.3f}um, dz={dz_um:+.3f}um, '
+                f'dtheta={dtheta_deg:+.6f}deg, '
+                f'theta_edge_abs={theta_edge_um:.3f}um'
+            )
+
+        if not results:
+            return
+        max_xy_um = max(result[0] for result in results)
+        rms_xy_um = math.sqrt(
+            sum(result[0] ** 2 for result in results) / len(results)
+        )
+        max_abs_z_um = max(abs(result[1]) for result in results)
+        max_abs_theta_deg = max(abs(result[2]) for result in results)
+        self.get_logger().info(
+            '[STACK_ABSOLUTE_ERROR_SUMMARY][SIM_GROUND_TRUTH] '
+            f'reported={len(results)}/{len(chip_specs)}, '
+            f'max_xy_abs={max_xy_um:.3f}um, rms_xy_abs={rms_xy_um:.3f}um, '
+            f'max_z_abs={max_abs_z_um:.3f}um, '
+            f'max_theta_abs={max_abs_theta_deg:.6f}deg'
+        )
 
     def log_final_placement_errors(self, vision_result):
         simulation_result = self.simulation_placement_ground_truth()
@@ -2779,6 +3014,20 @@ class MainControllerNode(Node):
             else self.VISION_MAX_THETA_DEG
         )
         dtheta = limit(values[3], max_theta)
+        if normalized_stage == 'micro':
+            position_deadband_mm = self.VISION_TOLERANCE_UM * 0.001
+            z_deadband_mm = self.VISION_Z_TOLERANCE_UM * 0.001
+            theta_deadband_deg = math.degrees(
+                position_deadband_mm / self.VISION_ROTATION_RADIUS_MM
+            )
+            if abs(dx) <= position_deadband_mm:
+                dx = 0.0
+            if abs(dy) <= position_deadband_mm:
+                dy = 0.0
+            if abs(dz) <= z_deadband_mm:
+                dz = 0.0
+            if abs(dtheta) <= theta_deadband_deg:
+                dtheta = 0.0
         target_theta = self.last_sent_theta_deg + dtheta
         target_z = max(
             self.GRIPPER_HOME_Z - self.VISION_Z_WINDOW_MM,
@@ -2787,10 +3036,14 @@ class MainControllerNode(Node):
                 self.last_sent_z + dz,
             ),
         )
+        x_lower, x_upper = self.COMMAND_LIMITS_MM['x']
+        y_lower, y_upper = self.COMMAND_LIMITS_MM['y']
+        target_x = max(x_lower, min(x_upper, self.last_sent_x + dx))
+        target_y = max(y_lower, min(y_upper, self.last_sent_y + dy))
 
         if not self.publish_move(
-            self.last_sent_x + dx,
-            self.last_sent_y + dy,
+            target_x,
+            target_y,
             target_z,
             theta_deg=target_theta,
         ):
@@ -2808,20 +3061,25 @@ class MainControllerNode(Node):
             return False
         return True
 
-    def average_vision_results(self, results):
-        count = len(results)
-        averaged = {
-            key: sum(float(result.get(key, 0.0)) for result in results) / count
+    def median_vision_results(self, results):
+        filtered = {
+            key: float(statistics.median(
+                float(result.get(key, 0.0)) for result in results
+            ))
             for key in ('dx', 'dy', 'dz', 'dtheta', 'score')
         }
-        averaged['source'] = 'vision_temporal_mean'
-        return averaged
+        filtered['source'] = 'vision_temporal_median'
+        latest = results[-1]
+        for key in ('alignment_feature', 'reference_set', 'reference_set_used'):
+            if key in latest:
+                filtered[key] = latest[key]
+        return filtered
 
     def align_at_reference_height(
         self,
         reference_set,
         target,
-        max_micro_iterations=12,
+        max_micro_iterations=20,
         settle_sec=None,
     ):
         if abs(self.last_sent_z - self.GRIPPER_HOME_Z) > 1e-9:
@@ -2841,7 +3099,7 @@ class MainControllerNode(Node):
                 )
                 return False
 
-        macro_result = self.request_vision({
+        macro_result = self.request_vision_with_retries({
             'action': 'align',
             'reference_set': reference_set,
             'target': target,
@@ -2858,21 +3116,89 @@ class MainControllerNode(Node):
             return False
 
         micro_history = []
+        optical_z_bias = None
+        optical_z_baseline_samples = []
+        optical_z_stability_mm = self.VISION_Z_TOLERANCE_UM * 0.001
         for iteration in range(1, int(max_micro_iterations) + 1):
-            micro_result = self.request_vision({
+            raw_micro_result = self.request_vision_with_retries({
                 'action': 'align',
                 'reference_set': reference_set,
                 'target': target,
                 'stage': 'micro',
             })
-            if micro_result is None:
+            if raw_micro_result is None:
                 return False
+            micro_result = dict(raw_micro_result)
+            raw_dz = float(raw_micro_result.get('dz', 0.0))
+            if optical_z_bias is None:
+                baseline_probe = raw_micro_result
+                baseline_from_temporal_median = False
+                window_size = self.VISION_MICRO_AVERAGE_WINDOW
+                if (
+                    window_size > 1
+                    and len(micro_history) >= window_size - 1
+                ):
+                    baseline_probe = self.median_vision_results([
+                        *micro_history[-(window_size - 1):],
+                        raw_micro_result,
+                    ])
+                    baseline_from_temporal_median = True
+
+                if self.vision_xy_theta_within_tolerance(baseline_probe):
+                    baseline_dz = float(baseline_probe.get('dz', 0.0))
+                    if baseline_from_temporal_median:
+                        optical_z_bias = baseline_dz
+                        micro_result = dict(baseline_probe)
+                        raw_dz = baseline_dz
+                    elif (
+                        optical_z_baseline_samples
+                        and abs(baseline_dz - optical_z_baseline_samples[-1])
+                        > optical_z_stability_mm
+                    ):
+                        optical_z_baseline_samples = [baseline_dz]
+                    else:
+                        optical_z_baseline_samples.append(baseline_dz)
+
+                    if (
+                        optical_z_bias is None
+                        and len(optical_z_baseline_samples) >= 2
+                    ):
+                        optical_z_bias = float(statistics.median(
+                            optical_z_baseline_samples[-2:],
+                        ))
+
+                    if optical_z_bias is not None:
+                        micro_history.clear()
+                        baseline_description = (
+                            f'temporal_median_window={window_size}'
+                            if baseline_from_temporal_median
+                            else f'samples={optical_z_baseline_samples[-2:]}'
+                        )
+                        self.get_logger().info(
+                            f'{target} [VISION_Z_BASELINE][IMAGE_ONLY]: '
+                            f'bias={optical_z_bias:+.6f}mm, '
+                            f'{baseline_description}, '
+                            'simulation ground truth는 사용하지 않았습니다.'
+                        )
+                else:
+                    optical_z_baseline_samples.clear()
+
+            if optical_z_bias is not None:
+                micro_result['raw_dz'] = raw_dz
+                micro_result['optical_z_bias'] = optical_z_bias
+                micro_result['dz'] = raw_dz - optical_z_bias
+                micro_result['source'] = 'vision_optical_z_bias_compensated'
+            else:
+                micro_result['source'] = 'vision_optical_z_baseline_pending'
             self.log_vision_result(
                 f'{target} Micro {iteration}/{int(max_micro_iterations)}',
                 micro_result,
             )
             micro_history.append(micro_result)
-            if self.vision_error_within_tolerance(micro_result):
+            if (
+                optical_z_bias is not None
+                and self.vision_error_within_tolerance(micro_result)
+            ):
                 self.get_logger().info(
                     f'{target} 비전 정렬 완료: vision XY/theta 환산 오차 '
                     f'{self.VISION_TOLERANCE_UM:.3f}um 이하, vision Z 추정 '
@@ -2880,26 +3206,39 @@ class MainControllerNode(Node):
                 )
                 return True
             window_size = self.VISION_MICRO_AVERAGE_WINDOW
+            correction_result = dict(micro_result)
+            if optical_z_bias is None:
+                correction_result['dz'] = 0.0
             if len(micro_history) >= window_size:
-                averaged_result = self.average_vision_results(
+                filtered_result = self.median_vision_results(
                     micro_history[-window_size:],
                 )
-                if self.vision_error_within_tolerance(averaged_result):
+                if (
+                    optical_z_bias is not None
+                    and self.vision_error_within_tolerance(filtered_result)
+                ):
                     self.log_vision_result(
-                        f'{target} Micro 최근 {window_size}프레임 평균',
-                        averaged_result,
+                        f'{target} Micro 최근 {window_size}프레임 중앙값',
+                        filtered_result,
                     )
                     self.get_logger().info(
                         f'{target} 비전 정렬 완료: simulation 값 없이 '
-                        f'최근 {window_size}개 image estimate 평균이 '
+                        f'최근 {window_size}개 image estimate 중앙값이 '
                         f'XY/theta {self.VISION_TOLERANCE_UM:.3f}um, '
                         f'Z {self.VISION_Z_TOLERANCE_UM:.3f}um 이하입니다.'
                     )
                     return True
+                # Temporal filtering is needed for noisy optical scale (Z),
+                # while XY/theta must follow the newest closed-loop image.
+                correction_result = dict(micro_result)
+                correction_result['dz'] = filtered_result['dz']
+                correction_result['source'] = 'vision_latest_xytheta_median_z'
+                if optical_z_bias is None:
+                    correction_result['dz'] = 0.0
             if iteration >= int(max_micro_iterations):
                 break
             if not self.apply_vision_correction(
-                micro_result,
+                correction_result,
                 'micro',
                 settle_sec=settle_sec,
             ):
@@ -2953,13 +3292,15 @@ class MainControllerNode(Node):
         chip_model=None,
         support_model=None,
         stack_level=0,
-        max_micro_iterations=12,
+        max_micro_iterations=20,
         settle_sec=None,
         vision_settle_sec=None,
         vision_timeout_sec=None,
         motion_timeout_sec=None,
         xy_theta_tolerance_um=None,
         z_tolerance_um=None,
+        reset_chip_before_pick=True,
+        measure_final_error=True,
     ):
         """기준 영상으로 4축 정렬한 뒤 기존 접촉 기반 pick/place를 실행합니다."""
 
@@ -3050,12 +3391,16 @@ class MainControllerNode(Node):
             self.get_logger().info(
                 '기존 substrate 및 하부 chip 적층 자세를 유지합니다.'
             )
-        self.reset_red_chip(
+        if reset_chip_before_pick and not self.reset_red_chip(
             pick_x,
             pick_y,
             chip_height,
             theta_deg=chip_spawn_theta,
-        )
+        ):
+            self.get_logger().error(
+                f'{self.RED_CHIP_MODEL}을 pick 시작 위치로 초기화하지 못했습니다.'
+            )
+            return False
 
         self.get_logger().info('1/11 예상 chip 위치의 기준 정렬 높이로 이동')
         if not self.publish_move(
@@ -3179,9 +3524,12 @@ class MainControllerNode(Node):
             return False
         time.sleep(0.3)
 
-        self.get_logger().info(
-            '10/11 substrate 위에서 기준 정렬 높이로 상승 후 배치 오차 측정'
+        step_10_description = (
+            'substrate 위에서 기준 정렬 높이로 상승 후 배치 오차 측정'
+            if measure_final_error
+            else 'substrate 위에서 기준 정렬 높이로 상승'
         )
+        self.get_logger().info(f'10/11 {step_10_description}')
         if not self.publish_move(
             aligned_place_x,
             aligned_place_y,
@@ -3190,7 +3538,11 @@ class MainControllerNode(Node):
         ):
             return False
         self.wait_for_vision_motion(minimum_settle_sec=settle_sec)
-        final_vision_error = self.measure_placement_error_from_vision()
+        final_vision_error = (
+            self.measure_placement_error_from_vision()
+            if measure_final_error
+            else None
+        )
 
         self.get_logger().info('11/11 초기 spawn 기준점으로 복귀')
         if not self.publish_move(
@@ -3201,23 +3553,91 @@ class MainControllerNode(Node):
         ):
             return False
         self.wait_for_motion(settle_sec)
-        self.log_final_placement_errors(final_vision_error)
+        if measure_final_error:
+            self.log_final_placement_errors(final_vision_error)
         self.get_logger().info('vision_pick_place_demo 완료')
+        return True
+
+    def build_stack_chip_specs(
+        self,
+        stack_count,
+        pick_x,
+        first_pick_y,
+        last_pick_y,
+        first_chip_theta_deg,
+        last_chip_theta_deg,
+    ):
+        count = int(stack_count)
+        if count < 2 or count > MAX_STACK_CHIP_COUNT:
+            raise ValueError(
+                f'stack_count는 2~{MAX_STACK_CHIP_COUNT} 범위여야 합니다: {count}'
+            )
+        if count > len(self.CHIP_MODELS):
+            raise ValueError(
+                f'controller가 {len(self.CHIP_MODELS)}개 chip용으로 초기화되어 '
+                f'{count}개 stack을 실행할 수 없습니다.'
+            )
+
+        specs = []
+        for stack_level in range(count):
+            ratio = stack_level / (count - 1)
+            specs.append({
+                'index': stack_level + 1,
+                'stack_level': stack_level,
+                'model': self.CHIP_MODELS[stack_level],
+                'pick_x': float(pick_x),
+                'pick_y': (
+                    float(first_pick_y)
+                    + ratio * (float(last_pick_y) - float(first_pick_y))
+                ),
+                'theta_deg': (
+                    float(first_chip_theta_deg)
+                    + ratio
+                    * (float(last_chip_theta_deg) - float(first_chip_theta_deg))
+                ),
+            })
+        return specs
+
+    def prepare_stack_source_chips(self, chip_specs, chip_height):
+        for spec in reversed(chip_specs):
+            support_model = (
+                self.SUBSTRATE_MODEL
+                if spec['stack_level'] == 0
+                else chip_specs[spec['stack_level'] - 1]['model']
+            )
+            self.activate_chip(
+                spec['model'],
+                support_model=support_model,
+                stack_level=spec['stack_level'],
+                log=False,
+            )
+            if not self.reset_red_chip(
+                spec['pick_x'],
+                spec['pick_y'],
+                chip_height,
+                theta_deg=spec['theta_deg'],
+                verify_pose=True,
+            ):
+                self.get_logger().error(
+                    f'chip {spec["index"]}({spec["model"]}) 초기화 실패: '
+                    'Gazebo를 동일한 STACK_COUNT로 실행했는지 확인하세요.'
+                )
+                return False
         return True
 
     def run_vision_stack_demo(
         self,
-        first_pick_x=500.0,
+        stack_count=DEFAULT_STACK_CHIP_COUNT,
+        pick_x=500.0,
         first_pick_y=400.0,
-        second_pick_x=500.0,
-        second_pick_y=0.0,
-        second_chip_theta_deg=30.0,
-        stack_count=None,
+        last_pick_y=-400.0,
+        first_chip_theta_deg=0.0,
+        last_chip_theta_deg=45.0,
         chip_z=None,
         place_x=None,
         place_y=None,
         contact_z=None,
-        max_micro_iterations=12,
+        max_micro_iterations=20,
         settle_sec=None,
         vision_settle_sec=None,
         vision_timeout_sec=None,
@@ -3225,7 +3645,20 @@ class MainControllerNode(Node):
         xy_theta_tolerance_um=None,
         z_tolerance_um=None,
     ):
-        """비전 정렬과 실제 contact를 사용해 4~16개 칩을 순차 적층합니다."""
+        """비전과 실제 contact를 사용해 2~16개의 chip을 순차 적층합니다."""
+
+        try:
+            chip_specs = self.build_stack_chip_specs(
+                stack_count,
+                pick_x,
+                first_pick_y,
+                last_pick_y,
+                first_chip_theta_deg,
+                last_chip_theta_deg,
+            )
+        except (TypeError, ValueError) as exc:
+            self.get_logger().error(str(exc))
+            return False
 
         requested_count = (
             self.STACK_COUNT
@@ -3240,49 +3673,63 @@ class MainControllerNode(Node):
         chip_height = self.CHIP_REST_Z if chip_z is None else float(chip_z)
         target_place_x = self.SUBSTRATE_CENTER_X if place_x is None else float(place_x)
         target_place_y = self.SUBSTRATE_CENTER_Y if place_y is None else float(place_y)
-        pick_specs = list(chip_pick_specs()[:requested_count])
-        pick_specs[0] = (float(first_pick_x), float(first_pick_y), 0.0)
-        pick_specs[1] = (
-            float(second_pick_x),
-            float(second_pick_y),
-            float(second_chip_theta_deg),
+        y_step = (chip_specs[-1]['pick_y'] - chip_specs[0]['pick_y']) / (
+            len(chip_specs) - 1
         )
+        theta_step = (
+            chip_specs[-1]['theta_deg'] - chip_specs[0]['theta_deg']
+        ) / (len(chip_specs) - 1)
         self.get_logger().info(
             'vision_stack_demo 시작: '
-            f'stack_count={requested_count}, '
-            f'stack=({target_place_x:.3f}, {target_place_y:.3f})mm'
+            f'chips={len(chip_specs)}, pick_x={float(pick_x):.3f}mm, '
+            f'pick_y={chip_specs[0]["pick_y"]:.3f}..'
+            f'{chip_specs[-1]["pick_y"]:.3f}mm(step={y_step:.3f}mm), '
+            f'chip_theta={chip_specs[0]["theta_deg"]:.3f}..'
+            f'{chip_specs[-1]["theta_deg"]:.3f}deg(step={theta_step:.3f}deg), '
+            f'stack=({target_place_x:.3f}, {target_place_y:.3f})mm, '
+            'place_alignment=substrate_only(place_empty), '
+            'per_layer_final_camera_measurement=disabled'
         )
+        for spec in chip_specs:
+            self.get_logger().info(
+                '[STACK_SOURCE] '
+                f'chip={spec["index"]}, model={spec["model"]}, '
+                f'pose=({spec["pick_x"]:.3f}, {spec["pick_y"]:.3f}, '
+                f'{chip_height:.3f})mm, theta={spec["theta_deg"]:.3f}deg'
+            )
 
         try:
-            for stack_level, model_name in enumerate(
-                self.CHIP_MODELS[:requested_count]
-            ):
-                pick_x, pick_y, chip_theta_deg = pick_specs[stack_level]
+            if not self.prepare_stack_source_chips(chip_specs, chip_height):
+                return False
+
+            for spec in chip_specs:
+                stack_level = spec['stack_level']
                 support_model = (
                     self.SUBSTRATE_MODEL
                     if stack_level == 0
-                    else self.CHIP_MODELS[stack_level - 1]
+                    else chip_specs[stack_level - 1]['model']
                 )
-                place_reference = (
-                    'place_empty' if stack_level == 0 else 'place_stacked'
+                contact_description = (
+                    'substrate_link-chip contact'
+                    if stack_level == 0
+                    else f'{support_model}-{spec["model"]} chip-chip contact'
                 )
                 self.get_logger().info(
-                    f'적층 {stack_level + 1}/{requested_count}: '
-                    f'{model_name}@({pick_x:.3f}, {pick_y:.3f})mm -> '
-                    f'{support_model}'
+                    f'적층 {spec["index"]}/{len(chip_specs)}: '
+                    f'{contact_description}를 기준으로 배치합니다.'
                 )
                 success = self.run_vision_pick_place_demo(
-                    pick_x=pick_x,
-                    pick_y=pick_y,
+                    pick_x=spec['pick_x'],
+                    pick_y=spec['pick_y'],
                     chip_z=chip_height,
-                    chip_theta_deg=chip_theta_deg,
+                    chip_theta_deg=spec['theta_deg'],
                     pick_gripper_theta_deg=0.0,
                     place_x=target_place_x,
                     place_y=target_place_y,
                     place_theta_deg=0.0,
                     contact_z=contact_z,
-                    place_reference=place_reference,
-                    chip_model=model_name,
+                    place_reference='place_empty',
+                    chip_model=spec['model'],
                     support_model=support_model,
                     stack_level=stack_level,
                     max_micro_iterations=max_micro_iterations,
@@ -3292,17 +3739,20 @@ class MainControllerNode(Node):
                     motion_timeout_sec=motion_timeout_sec,
                     xy_theta_tolerance_um=xy_theta_tolerance_um,
                     z_tolerance_um=z_tolerance_um,
+                    reset_chip_before_pick=False,
+                    measure_final_error=False,
                 )
                 if not success:
                     self.get_logger().error(
-                        f'{stack_level + 1}번째 chip 적층 실패: '
-                        '이후 chip 공정을 시작하지 않습니다.'
+                        f'chip {spec["index"]}/{len(chip_specs)} '
+                        f'({spec["model"]}) 적층 실패: 이후 공정을 중단합니다.'
                     )
                     return False
 
+            self.log_stack_absolute_errors(chip_specs)
             self.get_logger().info(
-                f'vision_stack_demo 완료: {requested_count}개 chip이 '
-                '선택된 순서대로 고정되었습니다.'
+                f'vision_stack_demo 완료: {len(chip_specs)}개 chip이 '
+                '각 층의 실제 contact 위치에서 순차 고정되었습니다.'
             )
             return True
         finally:
@@ -3609,13 +4059,12 @@ def main(args=None):
     rclpy.init(args=args)
     parser = build_parser()
     parsed_args = parser.parse_args(args)
-    node_stack_count = (
+    stack_chip_count = (
         parsed_args.stack_count
         if parsed_args.command == 'vision_stack_demo'
-        else None
+        else 2
     )
-
-    node = MainControllerNode(stack_count=node_stack_count)
+    node = MainControllerNode(stack_chip_count=stack_chip_count)
 
     command_result = None
     try:
@@ -3724,7 +4173,7 @@ def build_parser():
         choices=('place_empty', 'place_stacked'),
         default='place_empty',
     )
-    vision_demo_parser.add_argument('--max-micro-iterations', type=int, default=12)
+    vision_demo_parser.add_argument('--max-micro-iterations', type=int, default=20)
     vision_demo_parser.add_argument('--settle-sec', type=float, default=None)
     vision_demo_parser.add_argument('--vision-settle-sec', type=float, default=None)
     vision_demo_parser.add_argument('--vision-timeout-sec', type=float, default=None)
@@ -3739,23 +4188,27 @@ def build_parser():
     vision_stack_parser = subparsers.add_parser('vision_stack_demo')
     vision_stack_parser.add_argument(
         '--stack-count',
-        type=stack_count_arg,
-        default=None,
+        type=int,
+        default=DEFAULT_STACK_CHIP_COUNT,
     )
-    vision_stack_parser.add_argument('--first-pick-x', type=float, default=500.0)
+    vision_stack_parser.add_argument('--pick-x', type=float, default=500.0)
     vision_stack_parser.add_argument('--first-pick-y', type=float, default=400.0)
-    vision_stack_parser.add_argument('--second-pick-x', type=float, default=500.0)
-    vision_stack_parser.add_argument('--second-pick-y', type=float, default=0.0)
+    vision_stack_parser.add_argument('--last-pick-y', type=float, default=-400.0)
     vision_stack_parser.add_argument(
-        '--second-chip-theta-deg',
+        '--first-chip-theta-deg',
         type=float,
-        default=30.0,
+        default=0.0,
+    )
+    vision_stack_parser.add_argument(
+        '--last-chip-theta-deg',
+        type=float,
+        default=45.0,
     )
     vision_stack_parser.add_argument('--chip-z', type=float, default=None)
     vision_stack_parser.add_argument('--place-x', type=float, default=None)
     vision_stack_parser.add_argument('--place-y', type=float, default=None)
     vision_stack_parser.add_argument('--contact-z', type=float, default=None)
-    vision_stack_parser.add_argument('--max-micro-iterations', type=int, default=12)
+    vision_stack_parser.add_argument('--max-micro-iterations', type=int, default=20)
     vision_stack_parser.add_argument('--settle-sec', type=float, default=None)
     vision_stack_parser.add_argument('--vision-settle-sec', type=float, default=None)
     vision_stack_parser.add_argument('--vision-timeout-sec', type=float, default=None)
@@ -3872,11 +4325,11 @@ def run_command(node, args):
     elif args.command == 'vision_stack_demo':
         command_result = node.run_vision_stack_demo(
             stack_count=args.stack_count,
-            first_pick_x=args.first_pick_x,
+            pick_x=args.pick_x,
             first_pick_y=args.first_pick_y,
-            second_pick_x=args.second_pick_x,
-            second_pick_y=args.second_pick_y,
-            second_chip_theta_deg=args.second_chip_theta_deg,
+            last_pick_y=args.last_pick_y,
+            first_chip_theta_deg=args.first_chip_theta_deg,
+            last_chip_theta_deg=args.last_chip_theta_deg,
             chip_z=args.chip_z,
             place_x=args.place_x,
             place_y=args.place_y,

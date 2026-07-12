@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
@@ -70,8 +71,8 @@ class ReferenceRegistrationConfig:
     """기준 영상과 현재 영상의 4축 정합 설정."""
 
     max_width: int = 960
-    max_iterations: int = 120
-    epsilon: float = 1e-6
+    max_iterations: int = 60
+    epsilon: float = 1e-5
     min_correlation: float = 0.20
     macro_roi_fraction: float = 1.0
     micro_roi_fraction: float = 1.0
@@ -355,7 +356,9 @@ class VisionAligner:
         dx = -image_offset[0] * float(pixel_size[0]) * float(axis_sign[0])
         dy = -image_offset[1] * float(pixel_size[1]) * float(axis_sign[1])
         dz = float(reference_distance_mm) * (1.0 - 1.0 / scale)
-        dtheta = self._normalize_angle_deg(-image_rotation_deg)
+        # ECC's affine angle is the current-to-reference warp. With the moving
+        # downward camera, the joint command follows this warp's numeric sign.
+        dtheta = self._normalize_angle_deg(image_rotation_deg)
 
         return {
             "dx": float(dx),
@@ -417,6 +420,53 @@ class VisionAligner:
             "source": "macro_square_marker",
         }
 
+    def align_reference_substrate_outline(
+        self,
+        *,
+        reference_image: ImageInput,
+        current_image: ImageInput,
+        pixel_size: tuple[float, float],
+        reference_distance_mm: float,
+        axis_sign: tuple[float, float] = (1.0, 1.0),
+        theta_axis_sign: float = 1.0,
+    ) -> dict[str, float | str]:
+        """Align to the saturated substrate outline while ignoring gray chips."""
+
+        reference = self._load_image(reference_image)
+        current = self._load_image(current_image)
+        if current.shape[:2] != reference.shape[:2]:
+            current = cv2.resize(
+                current,
+                (reference.shape[1], reference.shape[0]),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        reference_marker, reference_area = self._detect_saturated_surface(reference)
+        current_marker, current_area = self._detect_saturated_surface(current)
+        image_offset_x = current_marker.center[0] - reference_marker.center[0]
+        image_offset_y = current_marker.center[1] - reference_marker.center[1]
+        dx = -image_offset_x * float(pixel_size[0]) * float(axis_sign[0])
+        dy = -image_offset_y * float(pixel_size[1]) * float(axis_sign[1])
+        dtheta = self._normalize_square_angle_deg(
+            current_marker.angle_deg - reference_marker.angle_deg
+        ) * float(theta_axis_sign)
+
+        area_scale = math.sqrt(max(current_area / reference_area, 1e-12))
+        area_score = min(reference_area, current_area) / max(
+            reference_area,
+            current_area,
+        )
+        return {
+            "dx": float(dx),
+            "dy": float(dy),
+            # Macro scale is sensitive to rendered contour edges. Micro ECC owns Z.
+            "dz": 0.0,
+            "dtheta": float(dtheta),
+            "score": float(area_score),
+            "scale": float(area_scale),
+            "source": "macro_substrate_outline",
+        }
+
     def align_reference_micro_set(
         self,
         *,
@@ -426,6 +476,7 @@ class VisionAligner:
         reference_distance_mm: float,
         axis_sign: tuple[float, float] = (1.0, 1.0),
         normalized_rois: Sequence[tuple[float, float, float, float]] | None = None,
+        registration_roi_fraction: float | None = None,
     ) -> dict[str, object]:
         """Micro 카메라 4대의 기준 영상 정합 결과를 강건하게 결합합니다."""
 
@@ -434,12 +485,8 @@ class VisionAligner:
         if normalized_rois is not None and len(normalized_rois) != 4:
             raise ValueError("Micro 정합 ROI는 카메라별로 정확히 4개가 필요합니다.")
 
-        results = []
-        failures = []
-        for index, (reference, current) in enumerate(
-            zip(reference_images, current_images),
-            start=1,
-        ):
+        def align_camera(camera_args):
+            index, reference, current = camera_args
             if normalized_rois is not None:
                 roi = normalized_rois[index - 1]
                 reference = self._crop_normalized_roi(
@@ -450,20 +497,45 @@ class VisionAligner:
                     self._load_image(current),
                     roi,
                 )
-            try:
-                result = self.align_reference_image(
-                    reference_image=reference,
-                    current_image=current,
-                    pixel_size=pixel_size,
-                    reference_distance_mm=reference_distance_mm,
-                    roi_fraction=self.reference_registration_config.micro_roi_fraction,
-                    axis_sign=axis_sign,
+            result = self.align_reference_image(
+                reference_image=reference,
+                current_image=current,
+                pixel_size=pixel_size,
+                reference_distance_mm=reference_distance_mm,
+                roi_fraction=registration_roi_fraction,
+                axis_sign=axis_sign,
+            )
+            if (
+                abs(float(result["dx"])) > 5.0
+                or abs(float(result["dy"])) > 5.0
+                or abs(float(result["dz"])) > 2.0
+                or abs(float(result["dtheta"])) > 10.0
+            ):
+                raise ValueError(
+                    "Micro ECC produced an implausible correction: "
+                    f"dx={result['dx']:.3f}mm, dy={result['dy']:.3f}mm, "
+                    f"dz={result['dz']:.3f}mm, "
+                    f"dtheta={result['dtheta']:.3f}deg"
                 )
-            except (ValueError, cv2.error) as exc:
-                failures.append({"camera_index": index, "error": str(exc)})
-                continue
             result["camera_index"] = index
-            results.append(result)
+            return result
+
+        camera_args = [
+            (index, reference, current)
+            for index, (reference, current) in enumerate(
+                zip(reference_images, current_images),
+                start=1,
+            )
+        ]
+        results = []
+        failures = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(align_camera, args) for args in camera_args]
+            for index, future in enumerate(futures, start=1):
+                try:
+                    results.append(future.result())
+                except (ValueError, cv2.error) as exc:
+                    failures.append({"camera_index": index, "error": str(exc)})
 
         if len(results) < 3:
             raise ValueError(
@@ -478,6 +550,7 @@ class VisionAligner:
         combined["per_camera"] = results
         combined["failed_cameras"] = failures
         combined["valid_camera_count"] = len(results)
+        combined["source"] = "micro_reference_ecc_marker_roi"
         return combined
 
     def _crop_normalized_roi(
@@ -671,6 +744,61 @@ class VisionAligner:
 
         return best[1]
 
+    def _detect_saturated_surface(
+        self,
+        frame: np.ndarray,
+    ) -> tuple[MarkerDetection, float]:
+        hsv = cv2.cvtColor(self._ensure_bgr(frame), cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(
+            hsv,
+            np.array((0, 60, 40), dtype=np.uint8),
+            np.array((179, 255, 255), dtype=np.uint8),
+        )
+        kernel = np.ones((5, 5), dtype=np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        image_area = float(frame.shape[0] * frame.shape[1])
+        candidates: list[tuple[float, MarkerDetection]] = []
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            if area < image_area * 0.002 or area > image_area * 0.5:
+                continue
+            rect = cv2.minAreaRect(contour)
+            (center_x, center_y), (width, height), _ = rect
+            if width <= 1.0 or height <= 1.0:
+                continue
+            long_side = max(width, height)
+            short_side = min(width, height)
+            square_score = short_side / long_side
+            if square_score < 0.5:
+                continue
+            box = cv2.boxPoints(rect)
+            candidates.append((
+                area,
+                MarkerDetection(
+                    center=(float(center_x), float(center_y)),
+                    score=float(square_score),
+                    size=int(round(long_side)),
+                    polarity="bright",
+                    angle_deg=self._rect_angle_deg(rect),
+                    box_points=tuple(
+                        (float(point[0]), float(point[1])) for point in box
+                    ),
+                ),
+            ))
+
+        if not candidates:
+            raise ValueError("Macro 이미지에서 substrate 외곽을 찾지 못했습니다.")
+
+        area, detection = max(candidates, key=lambda candidate: candidate[0])
+        return detection, area
+
     def _detect_cross_marker(
         self,
         frame: np.ndarray,
@@ -740,7 +868,9 @@ class VisionAligner:
     ) -> tuple[float, float]:
         # 템플릿 매칭은 정수 픽셀 위치가 기본이므로, 주변 패치의 foreground 중심을
         # 모멘트로 다시 계산해 sub-pixel 중심 좌표를 얻습니다.
-        radius = max(8, int(round(template_size * self.detection_config.refine_window_scale / 2.0)))
+        radius = max(8, int(round(
+            template_size * self.detection_config.refine_window_scale / 2.0
+        )))
         center_x, center_y = rough_center
         x0 = max(0, int(math.floor(center_x - radius)))
         y0 = max(0, int(math.floor(center_y - radius)))
@@ -1008,7 +1138,8 @@ class VisionAligner:
             y = int(round(460 - (point[1] - min_xy[1]) * scale))
             return x, y
 
-        for index, (reference, measured) in enumerate(zip(reference_points, measured_points), start=1):
+        point_pairs = zip(reference_points, measured_points)
+        for index, (reference, measured) in enumerate(point_pairs, start=1):
             ref_px = to_canvas(reference)
             meas_px = to_canvas(measured)
             cv2.circle(canvas, ref_px, 7, (255, 80, 80), -1)
@@ -1104,9 +1235,11 @@ class VisionAligner:
         # 중앙 마커가 사각형이면 0도와 90도는 시각적으로 같은 상태입니다.
         # OpenCV minAreaRect가 같은 사각형을 0도 또는 90도로 번갈아 반환할 수 있어
         # 사각 마커 기준 오차는 -45~45도 범위로 접어 안정화합니다.
+        # 정확히 45도인 경계는 -45도로 통일해 0->45도 칩 보정 부호가
+        # 15도 / 30도 칩과 같은 방향을 유지하게 합니다.
         while angle <= -45.0:
             angle += 90.0
-        while angle > 45.0:
+        while angle >= 45.0:
             angle -= 90.0
         return angle
 

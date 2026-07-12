@@ -127,6 +127,8 @@ class VisionAlignmentBridge(Node):
         self.declare_parameter("debug", False)
         self.declare_parameter("debug_dir", "vision_debug")
         self.declare_parameter("request_only", False)
+        self.declare_parameter("direct_gz_images", False)
+        self.declare_parameter("opencv_threads", 2)
         self.declare_parameter("request_topic", "/vision/alignment_request")
         self.declare_parameter("request_timeout_sec", 30.0)
         self.declare_parameter("request_warmup_frames", 1)
@@ -177,6 +179,18 @@ class VisionAlignmentBridge(Node):
         self.debug = as_bool(self.get_parameter("debug").value)
         self.debug_dir = Path(self.get_parameter("debug_dir").value)
         self.request_only = as_bool(self.get_parameter("request_only").value)
+        self.direct_gz_images = as_bool(
+            self.get_parameter("direct_gz_images").value
+        )
+        self.opencv_threads = max(
+            1,
+            min(
+                int(self.get_parameter("opencv_threads").value),
+                os.cpu_count() or 1,
+            ),
+        )
+        cv2.setUseOptimized(True)
+        cv2.setNumThreads(self.opencv_threads)
         self.request_topic = self.get_parameter("request_topic").value
         self.request_timeout_sec = float(
             self.get_parameter("request_timeout_sec").value
@@ -237,6 +251,12 @@ class VisionAlignmentBridge(Node):
         self.latest_frame_times = {}
         self.last_command_time = 0.0
         self.pending_request = None
+        self.gz_image_node = None
+        self.gz_image_message_type = None
+        self.gz_image_module = None
+        self.gz_image_subscriptions = {}
+        self.latest_gz_frame_stamps = {}
+        self.reference_image_cache = {}
 
         self.command_pub = self.create_publisher(Pose, self.command_topic, 10)
         self.result_pub = self.create_publisher(String, self.result_topic, 10)
@@ -248,25 +268,30 @@ class VisionAlignmentBridge(Node):
             10,
         )
 
-        self.create_subscription(
-            Image,
-            self.macro_topic,
-            lambda msg: self.handle_image(self.macro_topic, msg),
-            qos_profile_sensor_data,
-        )
-        for topic in self.micro_topics:
+        if self.direct_gz_images:
+            self.setup_direct_gz_images()
+        else:
             self.create_subscription(
                 Image,
-                topic,
-                lambda msg, topic=topic: self.handle_image(topic, msg),
+                self.macro_topic,
+                lambda msg: self.handle_image(self.macro_topic, msg),
                 qos_profile_sensor_data,
             )
+            for topic in self.micro_topics:
+                self.create_subscription(
+                    Image,
+                    topic,
+                    lambda msg, topic=topic: self.handle_image(topic, msg),
+                    qos_profile_sensor_data,
+                )
 
         self.create_timer(self.align_interval_sec, self.align_latest_frames)
         self.create_timer(0.1, self.process_pending_request)
         self.get_logger().info(
             "vision alignment bridge ready: "
             f"process={self.alignment_process}, auto_command={self.auto_command}, "
+            f"image_source={'gz_direct' if self.direct_gz_images else 'ros'}, "
+            f"opencv={cv2.__version__}, opencv_threads={self.opencv_threads}, "
             f"request_topic={self.request_topic}, result_topic={self.result_topic}"
         )
 
@@ -279,20 +304,88 @@ class VisionAlignmentBridge(Node):
         }
 
     def handle_image(self, topic: str, msg: Image) -> None:
+        request = self.pending_request
+        if self.request_only:
+            if request is None or topic not in self.request_topics(request):
+                return
+
         try:
             frame = self.image_msg_to_bgr(msg)
-            frame_time = time.monotonic()
-            self.latest_frames[topic] = frame
-            self.latest_frame_times[topic] = frame_time
-
-            request = self.pending_request
-            if request is not None and topic in self.request_topics(request):
-                frame_counts = request.setdefault("frame_counts", {})
-                frame_counts[topic] = frame_counts.get(topic, 0) + 1
-                if frame_counts[topic] >= self.request_warmup_frames:
-                    request.setdefault("frames", {})[topic] = frame
+            self.store_image_frame(topic, frame, request)
         except ValueError as exc:
             self.get_logger().warn(f"failed to convert image from {topic}: {exc}")
+
+    def setup_direct_gz_images(self) -> None:
+        try:
+            from gz.msgs10 import image_pb2
+            from gz.transport13 import Node as GzNode
+            from gz.transport13 import SubscribeOptions
+        except ImportError as exc:
+            raise RuntimeError(
+                "direct Gazebo images require gz.transport13 and gz.msgs10"
+            ) from exc
+
+        self.gz_image_node = GzNode()
+        self.gz_image_message_type = image_pb2.Image
+        self.gz_image_module = image_pb2
+        self.gz_subscribe_options_type = SubscribeOptions
+        if not self.request_only:
+            self.configure_direct_gz_topics([self.macro_topic, *self.micro_topics])
+
+    def configure_direct_gz_topics(self, topics: list[str]) -> None:
+        desired_topics = set(topics)
+        active_topics = set(self.gz_image_subscriptions)
+        for topic in active_topics - desired_topics:
+            self.gz_image_node.unsubscribe(topic)
+            self.gz_image_subscriptions.pop(topic, None)
+
+        for topic in desired_topics - active_topics:
+            def callback(data, _message_info, topic=topic):
+                self.handle_gz_image(topic, data)
+
+            subscribed = self.gz_image_node.subscribe_raw(
+                topic,
+                callback,
+                "ignition.msgs.Image",
+                self.gz_subscribe_options_type(),
+            )
+            if not subscribed:
+                raise RuntimeError(f"failed to subscribe Gazebo image topic: {topic}")
+            self.gz_image_subscriptions[topic] = callback
+
+    def handle_gz_image(self, topic: str, data: bytes) -> None:
+        request = self.pending_request
+        if self.request_only:
+            if request is None or topic not in self.request_topics(request):
+                return
+
+        try:
+            msg = self.gz_image_message_type()
+            msg.ParseFromString(data)
+            stamp = msg.header.stamp
+            frame_stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nsec)
+            if frame_stamp_ns <= 0:
+                frame_stamp_ns = time.monotonic_ns()
+            if frame_stamp_ns <= self.latest_gz_frame_stamps.get(topic, -1):
+                return
+            frame = self.gz_image_msg_to_bgr(msg)
+            self.latest_gz_frame_stamps[topic] = frame_stamp_ns
+            self.store_image_frame(topic, frame, request)
+        except (ValueError, TypeError) as exc:
+            self.get_logger().warn(
+                f"failed to convert direct Gazebo image from {topic}: {exc}"
+            )
+
+    def store_image_frame(self, topic: str, frame: np.ndarray, request: dict | None) -> None:
+        frame_time = time.monotonic()
+        self.latest_frames[topic] = frame
+        self.latest_frame_times[topic] = frame_time
+
+        if request is not None and topic in self.request_topics(request):
+            frame_counts = request.setdefault("frame_counts", {})
+            frame_counts[topic] = frame_counts.get(topic, 0) + 1
+            if frame_counts[topic] >= self.request_warmup_frames:
+                request.setdefault("frames", {})[topic] = frame
 
     def image_msg_to_bgr(self, msg: Image) -> np.ndarray:
         encoding = msg.encoding.lower()
@@ -322,6 +415,44 @@ class VisionAlignmentBridge(Node):
         if encoding in ("rgba8", "8uc4"):
             return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
         return cv2.cvtColor(frame.reshape(msg.height, msg.width), cv2.COLOR_GRAY2BGR)
+
+    def gz_image_msg_to_bgr(self, msg) -> np.ndarray:
+        formats = {
+            self.gz_image_module.L_INT8: (1, "gray"),
+            self.gz_image_module.RGB_INT8: (3, "rgb"),
+            self.gz_image_module.RGBA_INT8: (4, "rgba"),
+            self.gz_image_module.BGR_INT8: (3, "bgr"),
+            self.gz_image_module.BGRA_INT8: (4, "bgra"),
+        }
+        if msg.pixel_format_type not in formats:
+            raise ValueError(
+                f"unsupported Gazebo pixel format: {msg.pixel_format_type}"
+            )
+
+        channels, encoding = formats[msg.pixel_format_type]
+        row_step = int(msg.step) or int(msg.width) * channels
+        expected_size = int(msg.height) * row_step
+        if len(msg.data) < expected_size:
+            raise ValueError(
+                f"Gazebo image data is short: {len(msg.data)} < {expected_size}"
+            )
+        row = np.frombuffer(msg.data, dtype=np.uint8, count=expected_size).reshape(
+            int(msg.height),
+            row_step,
+        )
+        frame = row[:, : int(msg.width) * channels]
+        if channels > 1:
+            frame = frame.reshape(int(msg.height), int(msg.width), channels)
+
+        if encoding == "bgr":
+            return frame.copy()
+        if encoding == "rgb":
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        if encoding == "rgba":
+            return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        if encoding == "bgra":
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 
     def required_topics(self) -> list[str]:
         if self.alignment_process == "macro":
@@ -362,6 +493,19 @@ class VisionAlignmentBridge(Node):
         request["frames"] = {}
         request["frame_counts"] = {}
         self.pending_request = request
+        if self.direct_gz_images:
+            try:
+                self.configure_direct_gz_topics(self.request_topics(request))
+            except RuntimeError as exc:
+                self.pending_request = None
+                self.configure_direct_gz_topics([])
+                self.publish_result({
+                    "request_id": request_id,
+                    "action": action,
+                    "success": False,
+                    "error": str(exc),
+                })
+                return
         self.get_logger().info(
             f"vision request accepted: id={request_id}, action={action}, "
             f"stage={request.get('stage', '-')}, reference={request.get('reference_set', '-')}"
@@ -395,6 +539,8 @@ class VisionAlignmentBridge(Node):
                     if topic not in request_frames
                 ]
                 self.pending_request = None
+                if self.direct_gz_images:
+                    self.configure_direct_gz_topics([])
                 self.publish_result({
                     "request_id": request["request_id"],
                     "action": request["action"],
@@ -407,6 +553,10 @@ class VisionAlignmentBridge(Node):
                 })
             return
 
+        processing_started = time.monotonic()
+        frame_wait_ms = (
+            processing_started - float(request["requested_at"])
+        ) * 1000.0
         try:
             if request["action"] == "capture":
                 payload = self.capture_reference_set(request)
@@ -419,6 +569,10 @@ class VisionAlignmentBridge(Node):
                 "action": request["action"],
                 "success": True,
                 "timestamp": time.time(),
+                "frame_wait_ms": frame_wait_ms,
+                "processing_ms": (
+                    time.monotonic() - processing_started
+                ) * 1000.0,
             })
         except Exception as exc:  # noqa: BLE001
             payload = {
@@ -433,6 +587,14 @@ class VisionAlignmentBridge(Node):
             )
 
         self.pending_request = None
+        if self.direct_gz_images:
+            self.configure_direct_gz_topics([])
+        self.get_logger().info(
+            f"vision request complete: id={request['request_id']}, "
+            f"success={payload.get('success', False)}, "
+            f"frame_wait={frame_wait_ms:.1f}ms, "
+            f"processing={float(payload.get('processing_ms', 0.0)):.1f}ms"
+        )
         self.publish_result(payload)
 
     def reference_set_dir(self, reference_set: str) -> Path:
@@ -440,6 +602,21 @@ class VisionAlignmentBridge(Node):
         if normalized not in {"pick", "place_empty", "place_stacked"}:
             raise ValueError(f"unsupported reference set: {reference_set}")
         return self.reference_dir / normalized
+
+    def load_reference_image(self, path: Path) -> np.ndarray:
+        resolved = path.resolve()
+        stat = resolved.stat()
+        cache_key = str(resolved)
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cached = self.reference_image_cache.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+
+        frame = cv2.imread(str(resolved), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError(f"failed to read reference image: {resolved}")
+        self.reference_image_cache[cache_key] = (signature, frame)
+        return frame
 
     def capture_reference_set(self, request: dict) -> dict:
         reference_set = str(request.get("reference_set", ""))
@@ -470,6 +647,7 @@ class VisionAlignmentBridge(Node):
                 temporary_path.unlink(missing_ok=True)
                 raise OSError(f"saved reference image validation failed: {final_path}")
             os.replace(temporary_path, final_path)
+            self.reference_image_cache.pop(str(final_path.resolve()), None)
 
         metadata = {
             "reference_set": reference_set,
@@ -494,28 +672,33 @@ class VisionAlignmentBridge(Node):
         }
 
     def align_reference_set(self, request: dict) -> dict:
-        reference_set = str(request.get("reference_set", ""))
-        reference_dir = self.reference_set_dir(reference_set)
         stage = str(request.get("stage", "micro")).strip().lower()
         target = str(request.get("target", "pick")).strip().lower()
         is_pick = target == "pick"
+        requested_reference_set = str(request.get("reference_set", ""))
+        reference_set = requested_reference_set if is_pick else "place_empty"
+        reference_dir = self.reference_set_dir(reference_set)
         request_frames = request["frames"]
 
         if stage == "macro":
             reference_path = reference_dir / "macro.png"
             if not reference_path.is_file():
                 raise FileNotFoundError(f"missing macro reference: {reference_path}")
-            result = self.aligner.align_reference_square_marker(
-                reference_image=reference_path,
-                current_image=request_frames[self.macro_topic],
-                pixel_size=self.macro_pixel_size,
-                reference_distance_mm=(
+            common_args = {
+                "reference_image": self.load_reference_image(reference_path),
+                "current_image": request_frames[self.macro_topic],
+                "pixel_size": self.macro_pixel_size,
+                "reference_distance_mm": (
                     self.pick_macro_distance_mm
                     if is_pick
                     else self.place_macro_distance_mm
                 ),
-                axis_sign=self.macro_axis_sign,
-            )
+                "axis_sign": self.macro_axis_sign,
+            }
+            if is_pick:
+                result = self.aligner.align_reference_square_marker(**common_args)
+            else:
+                result = self.aligner.align_reference_substrate_outline(**common_args)
         elif stage == "micro":
             reference_paths = [
                 reference_dir / f"micro_{index}.png"
@@ -525,7 +708,9 @@ class VisionAlignmentBridge(Node):
             if missing:
                 raise FileNotFoundError(f"missing micro references: {missing}")
             result = self.aligner.align_reference_micro_set(
-                reference_images=reference_paths,
+                reference_images=[
+                    self.load_reference_image(path) for path in reference_paths
+                ],
                 current_images=[request_frames[topic] for topic in self.micro_topics],
                 pixel_size=self.micro_pixel_size,
                 reference_distance_mm=(
@@ -534,13 +719,20 @@ class VisionAlignmentBridge(Node):
                     else self.place_micro_distance_mm
                 ),
                 axis_sign=self.micro_axis_sign,
-                normalized_rois=(None if is_pick else PLACE_MICRO_MARKER_ROIS),
+                normalized_rois=(
+                    CHIP_MICRO_MARKER_ROIS
+                    if is_pick
+                    else PLACE_MICRO_MARKER_ROIS
+                ),
+                registration_roi_fraction=0.7,
             )
         else:
             raise ValueError(f"unsupported alignment stage: {stage}")
 
         result.update({
-            "reference_set": reference_set,
+            "reference_set": requested_reference_set,
+            "reference_set_used": reference_set,
+            "alignment_feature": "chip_pattern" if is_pick else "substrate_pattern",
             "stage": stage,
             "target": target,
         })
@@ -559,7 +751,9 @@ class VisionAlignmentBridge(Node):
 
         current_images = [request["frames"][topic] for topic in self.micro_topics]
         common_args = {
-            "reference_images": reference_paths,
+            "reference_images": [
+                self.load_reference_image(path) for path in reference_paths
+            ],
             "current_images": current_images,
             "pixel_size": self.micro_pixel_size,
             "reference_distance_mm": self.place_micro_distance_mm,

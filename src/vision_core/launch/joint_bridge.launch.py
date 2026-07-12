@@ -4,30 +4,14 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-MIN_STACK_COUNT = 4
-MAX_STACK_COUNT = 16
-
-
-def chip_model_name(layer_number):
-    return "check_chip" if layer_number == 1 else f"check_chip_{layer_number}"
-
-
-def parse_stack_count(context):
-    raw_value = LaunchConfiguration("stack_count").perform(context)
-    try:
-        stack_count = int(raw_value)
-    except ValueError as exc:
-        raise RuntimeError(f"stack_count must be an integer: {raw_value}") from exc
-    if not MIN_STACK_COUNT <= stack_count <= MAX_STACK_COUNT:
-        raise RuntimeError(
-            f"stack_count must be between {MIN_STACK_COUNT} and {MAX_STACK_COUNT}: "
-            f"{stack_count}"
-        )
-    return stack_count
-
-
 def launch_setup(context):
-    stack_count = parse_stack_count(context)
+    stack_count = int(LaunchConfiguration("stack_count").perform(context))
+    if stack_count < 1 or stack_count > 16:
+        raise RuntimeError(f"stack_count must be between 1 and 16: {stack_count}")
+    chip_models = tuple(
+        "check_chip" if chip_index == 1 else f"check_chip_{chip_index}"
+        for chip_index in range(1, stack_count + 1)
+    )
     bridge_args = [
         "/model/robot_system/joint/joint_x/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_y/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
@@ -47,12 +31,10 @@ def launch_setup(context):
         ),
     ]
     bridge_args.extend(
-        (
-            f"/world/empty/model/{chip_model_name(index)}/link/chip_link/sensor/"
-            "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
-            "[ignition.msgs.Contacts"
-        )
-        for index in range(1, stack_count + 1)
+        f"/world/empty/model/{model_name}/link/chip_link/sensor/"
+        "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
+        "[ignition.msgs.Contacts"
+        for model_name in chip_models
     )
 
     return [
@@ -83,6 +65,7 @@ def launch_setup(context):
                 "theta_tolerance": 0.00015,
                 "feedback_stale_timeout": 1.0,
                 "settle_samples": 5,
+                "stack_count": stack_count,
             }],
             output="screen",
         ),
@@ -91,14 +74,10 @@ def launch_setup(context):
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument("stack_count", default_value="4"),
         SetEnvironmentVariable(name="IGN_IP", value="127.0.0.1"),
         SetEnvironmentVariable(name="GZ_IP", value="127.0.0.1"),
         SetEnvironmentVariable(name="IGN_PARTITION", value="inha_die_bonder"),
         SetEnvironmentVariable(name="GZ_PARTITION", value="inha_die_bonder"),
-        DeclareLaunchArgument(
-            "stack_count",
-            default_value=str(MIN_STACK_COUNT),
-            description="Number of check-chip contact topics to bridge (4-16).",
-        ),
         OpaqueFunction(function=launch_setup),
     ])
