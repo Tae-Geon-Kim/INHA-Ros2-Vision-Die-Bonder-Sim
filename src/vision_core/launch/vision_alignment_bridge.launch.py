@@ -21,6 +21,21 @@ def generate_launch_description():
     history_id = LaunchConfiguration("history_id")
     pixel_size_x_mm = LaunchConfiguration("pixel_size_x_mm")
     pixel_size_y_mm = LaunchConfiguration("pixel_size_y_mm")
+    initial_x_mm = LaunchConfiguration("initial_x_mm")
+    initial_y_mm = LaunchConfiguration("initial_y_mm")
+    request_only = LaunchConfiguration("request_only")
+    request_topic = LaunchConfiguration("request_topic")
+    result_topic = LaunchConfiguration("result_topic")
+    request_timeout_sec = LaunchConfiguration("request_timeout_sec")
+    reference_dir = LaunchConfiguration("reference_dir")
+    macro_pixel_size_x_mm = LaunchConfiguration("macro_pixel_size_x_mm")
+    macro_pixel_size_y_mm = LaunchConfiguration("macro_pixel_size_y_mm")
+    micro_pixel_size_x_mm = LaunchConfiguration("micro_pixel_size_x_mm")
+    micro_pixel_size_y_mm = LaunchConfiguration("micro_pixel_size_y_mm")
+    macro_axis_sign_x = LaunchConfiguration("macro_axis_sign_x")
+    macro_axis_sign_y = LaunchConfiguration("macro_axis_sign_y")
+    micro_axis_sign_x = LaunchConfiguration("micro_axis_sign_x")
+    micro_axis_sign_y = LaunchConfiguration("micro_axis_sign_y")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -58,6 +73,81 @@ def generate_launch_description():
             default_value="1.0",
             description="Camera y calibration in mm/pixel.",
         ),
+        DeclareLaunchArgument(
+            "initial_x_mm",
+            default_value="140.0",
+            description="Initial gripper x coordinate in mm.",
+        ),
+        DeclareLaunchArgument(
+            "initial_y_mm",
+            default_value="0.0",
+            description="Initial gripper y coordinate in mm.",
+        ),
+        DeclareLaunchArgument(
+            "request_only",
+            default_value="false",
+            description="Only process explicit capture/alignment requests.",
+        ),
+        DeclareLaunchArgument(
+            "request_topic",
+            default_value="/vision/alignment_request",
+            description="Vision request topic for this bridge instance.",
+        ),
+        DeclareLaunchArgument(
+            "result_topic",
+            default_value="/vision/alignment_result",
+            description="Vision result topic for this bridge instance.",
+        ),
+        DeclareLaunchArgument(
+            "request_timeout_sec",
+            default_value="30.0",
+            description="Maximum wait for a fresh frame from every requested camera.",
+        ),
+        DeclareLaunchArgument(
+            "reference_dir",
+            default_value="vision_references",
+            description="Directory containing pick/place reference image sets.",
+        ),
+        DeclareLaunchArgument(
+            "macro_pixel_size_x_mm",
+            default_value="0.075",
+            description="Macro camera X calibration in mm/pixel.",
+        ),
+        DeclareLaunchArgument(
+            "macro_pixel_size_y_mm",
+            default_value="0.075",
+            description="Macro camera Y calibration in mm/pixel.",
+        ),
+        DeclareLaunchArgument(
+            "micro_pixel_size_x_mm",
+            default_value="0.0068",
+            description="Micro camera X calibration in mm/pixel.",
+        ),
+        DeclareLaunchArgument(
+            "micro_pixel_size_y_mm",
+            default_value="0.0068",
+            description="Micro camera Y calibration in mm/pixel.",
+        ),
+        DeclareLaunchArgument(
+            "macro_axis_sign_x",
+            default_value="-1.0",
+            description="Macro image X to robot X axis sign.",
+        ),
+        DeclareLaunchArgument(
+            "macro_axis_sign_y",
+            default_value="1.0",
+            description="Macro image Y to robot Y axis sign.",
+        ),
+        DeclareLaunchArgument(
+            "micro_axis_sign_x",
+            default_value="-1.0",
+            description="Micro image X to robot X axis sign.",
+        ),
+        DeclareLaunchArgument(
+            "micro_axis_sign_y",
+            default_value="1.0",
+            description="Micro image Y to robot Y axis sign.",
+        ),
         SetEnvironmentVariable(name="IGN_IP", value="127.0.0.1"),
         SetEnvironmentVariable(name="GZ_IP", value="127.0.0.1"),
         SetEnvironmentVariable(name="IGN_PARTITION", value="inha_die_bonder"),
@@ -81,6 +171,21 @@ def generate_launch_description():
                 "history_id": history_id,
                 "pixel_size_x_mm": pixel_size_x_mm,
                 "pixel_size_y_mm": pixel_size_y_mm,
+                "initial_x_mm": initial_x_mm,
+                "initial_y_mm": initial_y_mm,
+                "request_only": request_only,
+                "request_topic": request_topic,
+                "result_topic": result_topic,
+                "request_timeout_sec": request_timeout_sec,
+                "reference_dir": reference_dir,
+                "macro_pixel_size_x_mm": macro_pixel_size_x_mm,
+                "macro_pixel_size_y_mm": macro_pixel_size_y_mm,
+                "micro_pixel_size_x_mm": micro_pixel_size_x_mm,
+                "micro_pixel_size_y_mm": micro_pixel_size_y_mm,
+                "macro_axis_sign_x": macro_axis_sign_x,
+                "macro_axis_sign_y": macro_axis_sign_y,
+                "micro_axis_sign_x": micro_axis_sign_x,
+                "micro_axis_sign_y": micro_axis_sign_y,
             }],
             output="screen",
         ),

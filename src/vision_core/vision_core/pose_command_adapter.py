@@ -4,9 +4,11 @@ import time
 
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from geometry_msgs.msg import Pose
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from ros_gz_interfaces.msg import Contacts
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
 
@@ -32,6 +34,32 @@ JOINT_NAME_TO_AXIS = {
 }
 
 LIMIT_EPSILON = 1e-6
+CONTACT_DESCENT_EPSILON = 0.0002
+CONTACT_PAIR_REARM_SEC = 5.0
+PICK_CONTACT_TARGET_Z_MAX = -0.112
+PICKER_CONTACT_TOKENS = ("picker_contact_collision",)
+SUBSTRATE_CONTACT_TOKENS = ("substrate_link_collision", "substrate_link")
+CHIP_CONTACT_TOKENS = ("check_chip", "chip_link")
+PRIMARY_CHIP_CONTACT_TOKENS = ("check_chip::", "/model/check_chip/")
+SECOND_CHIP_CONTACT_TOKENS = ("check_chip_2::", "/model/check_chip_2/")
+
+
+def format_joint_pose_si(pose: JointPose) -> str:
+    return (
+        f"(x={pose.x:.9f}m, y={pose.y:.9f}m, z={pose.z:.9f}m, "
+        f"theta={pose.theta:.9f}rad)"
+    )
+
+
+def format_joint_error_si(errors: dict[str, float] | None) -> str:
+    if errors is None:
+        return "unavailable"
+    return (
+        f"(x={errors['x'] * 1e6:.3f}um, "
+        f"y={errors['y'] * 1e6:.3f}um, "
+        f"z={errors['z'] * 1e6:.3f}um, "
+        f"theta={errors['theta'] * 1e6:.3f}urad)"
+    )
 
 
 def yaw_from_pose(pose: Pose) -> float:
@@ -71,6 +99,8 @@ class PoseCommandAdapter(Node):
         self.declare_parameter("theta_tolerance", 0.02)
         self.declare_parameter("feedback_stale_timeout", 1.0)
         self.declare_parameter("settle_samples", 5)
+        self.declare_parameter("restore_state", False)
+        self.declare_parameter("idle_hold_period", 0.05)
 
         self.scale = unit_scale(self.get_parameter("input_unit").value)
         self.coordinate_frame = self.get_parameter("coordinate_frame").value
@@ -90,15 +120,28 @@ class PoseCommandAdapter(Node):
             self.get_parameter("feedback_stale_timeout").value
         )
         self.settle_samples = int(self.get_parameter("settle_samples").value)
+        self.restore_state = bool(self.get_parameter("restore_state").value)
+        self.idle_hold_period = float(
+            self.get_parameter("idle_hold_period").value
+        )
 
         self.publishers_by_axis = {
             axis: self.create_publisher(Float64, topic, 10)
             for axis, topic in JOINT_TOPICS.items()
         }
-        self.current_pose = load_state(PRESETS["home"])
+        self.current_pose = (
+            load_state(PRESETS["home"])
+            if self.restore_state
+            else PRESETS["home"]
+        )
         self.actual_pose = None
         self.last_joint_state_time = 0.0
         self.feedback_lock = threading.Lock()
+        self.contact_lock = threading.Lock()
+        self.picker_contact_generation = 0
+        self.substrate_contact_generation = 0
+        self.placement_contact_last_seen = {}
+        self.motion_stopped_by_contact = False
         self.command_group = MutuallyExclusiveCallbackGroup()
         self.feedback_group = ReentrantCallbackGroup()
         self.create_subscription(
@@ -116,6 +159,35 @@ class PoseCommandAdapter(Node):
                 10,
                 callback_group=self.feedback_group,
             )
+        self.create_subscription(
+            Contacts,
+            "/world/empty/model/substrate/link/substrate_link/"
+            "sensor/substrate_contact_sensor/contact",
+            self.handle_substrate_contacts,
+            qos_profile_sensor_data,
+            callback_group=self.feedback_group,
+        )
+        self.idle_hold_timer = self.create_timer(
+            max(0.01, self.idle_hold_period),
+            self.hold_current_target,
+            callback_group=self.command_group,
+        )
+        self.create_subscription(
+            Contacts,
+            "/world/empty/model/check_chip/link/chip_link/"
+            "sensor/chip_contact_sensor/contact",
+            self.handle_substrate_contacts,
+            qos_profile_sensor_data,
+            callback_group=self.feedback_group,
+        )
+        self.create_subscription(
+            Contacts,
+            "/world/empty/model/check_chip_2/link/chip_link/"
+            "sensor/chip_contact_sensor/contact",
+            self.handle_substrate_contacts,
+            qos_profile_sensor_data,
+            callback_group=self.feedback_group,
+        )
 
         self.get_logger().info(
             f"listening on /robot/command_pose as {self.coordinate_frame} coordinates "
@@ -123,8 +195,12 @@ class PoseCommandAdapter(Node):
         )
         if self.feedback_enabled:
             self.get_logger().info(
-                f"using actual joint feedback from {self.joint_state_topic}"
+                "[SIM_JOINT_FEEDBACK][NOT_VISION] using Gazebo joint_state from "
+                f"{self.joint_state_topic}; internal units=(m, m, m, rad)"
             )
+
+    def hold_current_target(self) -> None:
+        self.publish_pose(self.current_pose)
 
     def pose_to_joint_pose(self, msg: Pose) -> JointPose:
         x = msg.position.x * self.scale
@@ -181,6 +257,95 @@ class PoseCommandAdapter(Node):
             self.actual_pose = actual_pose
             self.last_joint_state_time = time.monotonic()
 
+    def handle_substrate_contacts(self, msg: Contacts) -> None:
+        for contact in msg.contacts:
+            first_name = contact.collision1.name.lower()
+            second_name = contact.collision2.name.lower()
+            picker_chip_match = (
+                any(token in first_name for token in PICKER_CONTACT_TOKENS)
+                and any(token in second_name for token in CHIP_CONTACT_TOKENS)
+            ) or (
+                any(token in second_name for token in PICKER_CONTACT_TOKENS)
+                and any(token in first_name for token in CHIP_CONTACT_TOKENS)
+            )
+            direct_match = (
+                any(token in first_name for token in SUBSTRATE_CONTACT_TOKENS)
+                and any(token in second_name for token in CHIP_CONTACT_TOKENS)
+            )
+            reverse_match = (
+                any(token in second_name for token in SUBSTRATE_CONTACT_TOKENS)
+                and any(token in first_name for token in CHIP_CONTACT_TOKENS)
+            )
+            chip_stack_match = (
+                any(token in first_name for token in PRIMARY_CHIP_CONTACT_TOKENS)
+                and any(token in second_name for token in SECOND_CHIP_CONTACT_TOKENS)
+            ) or (
+                any(token in second_name for token in PRIMARY_CHIP_CONTACT_TOKENS)
+                and any(token in first_name for token in SECOND_CHIP_CONTACT_TOKENS)
+            )
+            if picker_chip_match or direct_match or reverse_match or chip_stack_match:
+                contact_pair = tuple(sorted((first_name, second_name)))
+                now = time.monotonic()
+                with self.contact_lock:
+                    last_seen = self.placement_contact_last_seen.get(
+                        contact_pair,
+                        0.0,
+                    )
+                    self.placement_contact_last_seen[contact_pair] = now
+                    if now - last_seen <= CONTACT_PAIR_REARM_SEC:
+                        return
+                    if picker_chip_match:
+                        self.picker_contact_generation += 1
+                    else:
+                        self.substrate_contact_generation += 1
+                return
+
+    def get_picker_contact_generation(self) -> int:
+        with self.contact_lock:
+            return self.picker_contact_generation
+
+    def get_substrate_contact_generation(self) -> int:
+        with self.contact_lock:
+            return self.substrate_contact_generation
+
+    def stop_descent_on_substrate_contact(
+        self,
+        descending: bool,
+        monitor_picker_contact: bool,
+        initial_picker_contact_generation: int,
+        initial_placement_contact_generation: int,
+    ) -> bool:
+        if not descending:
+            return False
+
+        if monitor_picker_contact:
+            contact_detected = (
+                self.get_picker_contact_generation()
+                > initial_picker_contact_generation
+            )
+            contact_name = "picker-chip"
+        else:
+            contact_detected = (
+                self.get_substrate_contact_generation()
+                > initial_placement_contact_generation
+            )
+            contact_name = "placement"
+        if not contact_detected:
+            return False
+
+        actual = self.get_actual_pose()
+        hold_target = actual if actual is not None else self.current_pose
+        self.publish_pose(hold_target)
+        self.current_pose = hold_target
+        save_state(hold_target)
+        self.motion_stopped_by_contact = True
+        self.get_logger().info(
+            f"[SIM_CONTACT_SENSOR][NOT_VISION] {contact_name} contact detected: "
+            "stopping Z descent at "
+            f"joint_z={hold_target.z:.6f}m"
+        )
+        return True
+
     def clamp_feedback_value(self, axis: str, value: float) -> float:
         if axis not in JOINT_LIMITS:
             return value
@@ -220,7 +385,14 @@ class PoseCommandAdapter(Node):
             and errors["theta"] <= self.theta_tolerance
         )
 
-    def wait_until_reached(self, target: JointPose) -> bool:
+    def wait_until_reached(
+        self,
+        target: JointPose,
+        descending: bool = False,
+        monitor_picker_contact: bool = False,
+        initial_picker_contact_generation: int = 0,
+        initial_placement_contact_generation: int = 0,
+    ) -> bool:
         if not self.feedback_enabled:
             return False
 
@@ -230,6 +402,13 @@ class PoseCommandAdapter(Node):
         last_errors = None
 
         while time.monotonic() < deadline:
+            if self.stop_descent_on_substrate_contact(
+                descending,
+                monitor_picker_contact,
+                initial_picker_contact_generation,
+                initial_placement_contact_generation,
+            ):
+                return False
             self.publish_pose(target)
             actual = self.get_actual_pose()
             if actual is None:
@@ -245,10 +424,13 @@ class PoseCommandAdapter(Node):
             if self.reached_target(actual, target):
                 stable_count += 1
                 if stable_count >= self.settle_samples:
-                    self.current_pose = actual
-                    save_state(actual)
+                    self.current_pose = target
+                    save_state(target)
                     self.get_logger().info(
-                        f"arrived with feedback: actual={actual}, errors={last_errors}"
+                        "[SIM_JOINT_FEEDBACK][NOT_VISION] arrived: "
+                        f"target_SI={format_joint_pose_si(target)}, "
+                        f"actual_SI={format_joint_pose_si(actual)}, "
+                        f"abs_error={format_joint_error_si(last_errors)}"
                     )
                     return True
             else:
@@ -262,8 +444,10 @@ class PoseCommandAdapter(Node):
             save_state(actual)
 
         self.get_logger().warn(
-            f"feedback arrival timeout: target={target}, actual={actual}, "
-            f"errors={last_errors}"
+            "[SIM_JOINT_FEEDBACK][NOT_VISION] arrival timeout: "
+            f"target_SI={format_joint_pose_si(target)}, "
+            f"actual_SI={format_joint_pose_si(actual) if actual else 'unavailable'}, "
+            f"abs_error={format_joint_error_si(last_errors)}"
         )
         return False
 
@@ -277,17 +461,56 @@ class PoseCommandAdapter(Node):
             time.sleep(self.period)
 
     def move_to(self, target: JointPose) -> None:
-        self.get_logger().info(f"/robot/command_pose -> {target}")
+        self.get_logger().info(
+            "[SIM_JOINT_TARGET][NOT_VISION] /robot/command_pose -> "
+            f"target_SI={format_joint_pose_si(target)}"
+        )
         actual_start = self.get_actual_pose()
         if actual_start is not None:
             self.current_pose = actual_start
 
-        for pose in linear_profile(self.current_pose, target, self.steps):
+        descending = target.z < self.current_pose.z - CONTACT_DESCENT_EPSILON
+        monitor_picker_contact = target.z <= PICK_CONTACT_TARGET_Z_MAX
+        initial_picker_contact_generation = self.get_picker_contact_generation()
+        initial_placement_contact_generation = self.get_substrate_contact_generation()
+        self.motion_stopped_by_contact = False
+
+        linear_delta = max(
+            abs(target.x - self.current_pose.x),
+            abs(target.y - self.current_pose.y),
+            abs(target.z - self.current_pose.z),
+        )
+        theta_delta = abs(math.atan2(
+            math.sin(target.theta - self.current_pose.theta),
+            math.cos(target.theta - self.current_pose.theta),
+        ))
+        profile_steps = max(
+            4,
+            int(math.ceil(linear_delta / 0.00025)),
+            int(math.ceil(theta_delta / math.radians(0.25))),
+        )
+        profile_steps = min(self.steps, profile_steps)
+
+        for pose in linear_profile(self.current_pose, target, profile_steps):
+            if self.stop_descent_on_substrate_contact(
+                descending,
+                monitor_picker_contact,
+                initial_picker_contact_generation,
+                initial_placement_contact_generation,
+            ):
+                return
             self.publish_pose(pose)
             time.sleep(self.period)
 
-        if not self.wait_until_reached(target):
-            self.hold_pose(target)
+        if not self.wait_until_reached(
+            target,
+            descending=descending,
+            monitor_picker_contact=monitor_picker_contact,
+            initial_picker_contact_generation=initial_picker_contact_generation,
+            initial_placement_contact_generation=initial_placement_contact_generation,
+        ):
+            if not self.motion_stopped_by_contact:
+                self.hold_pose(target)
             save_state(self.current_pose)
 
     def handle_command(self, msg: Pose) -> None:
@@ -305,10 +528,13 @@ def main(args=None) -> int:
 
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         executor.remove_node(node)
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
     return 0
 

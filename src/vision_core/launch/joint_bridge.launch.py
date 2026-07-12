@@ -10,6 +10,30 @@ def generate_launch_description():
         "/model/robot_system/joint/joint_z/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint/joint_theta/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double",
         "/model/robot_system/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model",
+        (
+            "/world/empty/pose/info@tf2_msgs/msg/TFMessage"
+            "[ignition.msgs.Pose_V"
+        ),
+        (
+            "/world/empty/model/robot_system/link/theta_link_1/sensor/"
+            "picker_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
+            "[ignition.msgs.Contacts"
+        ),
+        (
+            "/world/empty/model/substrate/link/substrate_link/sensor/"
+            "substrate_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
+            "[ignition.msgs.Contacts"
+        ),
+        (
+            "/world/empty/model/check_chip/link/chip_link/sensor/"
+            "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
+            "[ignition.msgs.Contacts"
+        ),
+        (
+            "/world/empty/model/check_chip_2/link/chip_link/sensor/"
+            "chip_contact_sensor/contact@ros_gz_interfaces/msg/Contacts"
+            "[ignition.msgs.Contacts"
+        ),
     ]
 
     return LaunchDescription([
@@ -31,16 +55,16 @@ def generate_launch_description():
             parameters=[{
                 "input_unit": "mm",
                 "coordinate_frame": "gripper_abs",
-                "steps": 80,
-                "period": 0.01,
-                "hold": 0.15,
+                "steps": 180,
+                "period": 0.008,
+                "hold": 0.05,
                 "feedback_enabled": True,
                 "joint_state_topic": "/model/robot_system/joint_state",
-                "arrival_timeout": 8.0,
+                "arrival_timeout": 10.0,
                 "initial_feedback_timeout": 0.5,
-                "arrival_tolerance": 0.002,
-                "z_tolerance": 0.008,
-                "theta_tolerance": 0.02,
+                "arrival_tolerance": 0.00002,
+                "z_tolerance": 0.0001,
+                "theta_tolerance": 0.00015,
                 "feedback_stale_timeout": 1.0,
                 "settle_samples": 5,
             }],

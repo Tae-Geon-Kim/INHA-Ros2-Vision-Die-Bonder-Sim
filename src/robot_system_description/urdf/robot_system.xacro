@@ -20,7 +20,7 @@
     <geometry>
       <mesh filename="package://robot_system_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
     </geometry>
-    <material name="silver"/>
+    <material name="black"/>
   </visual>
   <collision>
     <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -39,8 +39,8 @@
 <link name="y_link_1">
   <inertial>
     <origin xyz="0.030000000000000013 0.0 0.0" rpy="0 0 0"/>
-    <mass value="7.0649999999999995"/>
-    <inertia ixx="0.038916" iyy="0.038916" izz="0.004239" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+    <mass value="0.18"/>
+    <inertia ixx="0.000991490446" iyy="0.000991490446" izz="0.000108" ixy="0.0" iyz="0.0" ixz="0.0"/>
   </inertial>
   <visual>
     <origin xyz="-0.05 -0.0 -0.225" rpy="0 0 0"/>
@@ -60,8 +60,8 @@
 <link name="z_link_1">
   <inertial>
     <origin xyz="0.030000000000000013 -3.947459643111668e-18 0.0" rpy="0 0 0"/>
-    <mass value="0.5651999999999999"/>
-    <inertia ixx="0.000188" iyy="0.000188" izz="0.000339" ixy="0.0" iyz="0.0" ixz="0.0"/>
+    <mass value="0.09"/>
+    <inertia ixx="0.000029936306" iyy="0.000029936306" izz="0.000053980892" ixy="0.0" iyz="0.0" ixz="0.0"/>
   </inertial>
   <visual>
     <origin xyz="-0.11 -0.0 -0.225" rpy="0 0 0"/>
@@ -81,8 +81,8 @@
 <link name="theta_link_1">
   <inertial>
     <origin xyz="0.0001732869481511634 -1.9700445167097035e-18 -0.0303093012095626" rpy="0 0 0"/>
-    <mass value="0.07078216289539181"/>
-    <inertia ixx="1.2e-05" iyy="1e-05" izz="6e-06" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+    <mass value="0.05"/>
+    <inertia ixx="0.000008476712" iyy="0.000007063927" izz="0.000004238356" ixy="0.0" iyz="0.0" ixz="0.0"/>
   </inertial>
   <visual>
     <origin xyz="-0.14 0.0 -0.215" rpy="0 0 0"/>
@@ -91,16 +91,10 @@
     </geometry>
     <material name="silver"/>
   </visual>
-  <collision>
-    <origin xyz="-0.14 0.0 -0.215" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="package://robot_system_description/meshes/theta_link_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
   <collision name="picker_contact_collision">
-    <origin xyz="0 0 -0.0595" rpy="0 0 0"/>
+    <origin xyz="0 0 -0.045" rpy="0 0 0"/>
     <geometry>
-      <box size="0.012 0.012 0.001"/>
+      <cylinder radius="0.0035" length="0.010"/>
     </geometry>
   </collision>
 </link>
@@ -108,8 +102,8 @@
 <link name="x_link_1">
   <inertial>
     <origin xyz="8.91814442532711e-18 0.55 0.07933333333333334" rpy="0 0 0"/>
-    <mass value="35.324999999999996"/>
-    <inertia ixx="3.728361" iyy="0.035388" izz="3.751849" ixy="0.0" iyz="0.0" ixz="0.0"/>
+    <mass value="0.45"/>
+    <inertia ixx="0.04749504459" iyy="0.000450802548" izz="0.04779425478" ixy="0.0" iyz="0.0" ixz="0.0"/>
   </inertial>
   <visual>
     <origin xyz="-0.0 0.55 -0.165" rpy="0 0 0"/>
@@ -131,8 +125,8 @@
   <parent link="x_link_1"/>
   <child link="y_link_1"/>
   <axis xyz="0.0 -1.0 0.0"/>
-  <limit upper="0.4" lower="-0.4" effort="30" velocity="0.2"/>
-  <dynamics damping="25.0" friction="2.0"/>
+  <limit upper="0.4" lower="-0.4" effort="8" velocity="0.2"/>
+  <dynamics damping="3.0" friction="0.0"/>
 </joint>
 
 <joint name="joint_z" type="prismatic">
@@ -140,8 +134,8 @@
   <parent link="y_link_1"/>
   <child link="z_link_1"/>
   <axis xyz="0.0 0.0 1.0"/>
-  <limit upper="0.115" lower="-0.115" effort="80" velocity="0.25"/>
-  <dynamics damping="3.0" friction="0.05"/>
+  <limit upper="0.115" lower="-0.115" effort="6" velocity="0.25"/>
+  <dynamics damping="0.8" friction="0.0"/>
 </joint>
 
 <joint name="joint_theta" type="continuous">
@@ -149,7 +143,8 @@
   <parent link="z_link_1"/>
   <child link="theta_link_1"/>
   <axis xyz="-0.0 0.0 -1.0"/>
-  <dynamics damping="0.2" friction="0.05"/>
+  <limit effort="0.2" velocity="3.14"/>
+  <dynamics damping="0.0002" friction="0.0"/>
 </joint>
 
 <joint name="joint_x" type="prismatic">
@@ -157,15 +152,20 @@
   <parent link="base_link"/>
   <child link="x_link_1"/>
   <axis xyz="1.0 0.0 0.0"/>
-  <limit upper="0.4" lower="-0.4" effort="40" velocity="0.2"/>
-  <dynamics damping="30.0" friction="2.0"/>
+  <limit upper="0.4" lower="-0.4" effort="12" velocity="0.2"/>
+  <dynamics damping="6.0" friction="0.0"/>
 </joint>
 
 <gazebo reference="theta_link_1">
+  <selfCollide>true</selfCollide>
+  <kp>1000000.0</kp>
+  <kd>100.0</kd>
+  <maxVel>0.01</maxVel>
+  <minDepth>0.0</minDepth>
   <sensor name="picker_contact_sensor" type="contact">
     <topic>/model/robot_system/picker/contact</topic>
     <contact>
-      <collision>theta_link_1_fixed_joint_lump__picker_contact_collision_collision_1</collision>
+      <collision>theta_link_1_fixed_joint_lump__picker_contact_collision_collision</collision>
     </contact>
     <always_on>1</always_on>
     <update_rate>100</update_rate>
@@ -174,7 +174,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="macro_camera">
-    <update_rate>30.0</update_rate>
+    <update_rate>5.0</update_rate>
     <topic>vision/macro_camera/image_raw</topic>
     <camera>
       <horizontal_fov>1.047</horizontal_fov>
@@ -195,7 +195,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_1">
-    <update_rate>30.0</update_rate>
+    <update_rate>5.0</update_rate>
     <topic>vision/micro_camera_1/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -216,7 +216,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_2">
-    <update_rate>30.0</update_rate>
+    <update_rate>5.0</update_rate>
     <topic>vision/micro_camera_2/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -237,7 +237,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_3">
-    <update_rate>30.0</update_rate>
+    <update_rate>5.0</update_rate>
     <topic>vision/micro_camera_3/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -258,7 +258,7 @@
 
 <gazebo reference="theta_link_1">
   <sensor type="camera" name="micro_camera_4">
-    <update_rate>30.0</update_rate>
+    <update_rate>5.0</update_rate>
     <topic>vision/micro_camera_4/image_raw</topic>
     <camera>
       <horizontal_fov>0.11</horizontal_fov>
@@ -291,48 +291,37 @@
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_x</joint_name>
     <topic>/model/robot_system/joint/joint_x/cmd_pos</topic>
-    <p_gain>650.0</p_gain>
-    <i_gain>8.0</i_gain>
-    <d_gain>75.0</d_gain>
+    <p_gain>220.0</p_gain>
+    <i_gain>0.0</i_gain>
+    <d_gain>20.0</d_gain>
+    <cmd_max>12.0</cmd_max>
+    <cmd_min>-12.0</cmd_min>
   </plugin>
 
   <plugin filename="libignition-gazebo-joint-position-controller-system.so"
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_y</joint_name>
     <topic>/model/robot_system/joint/joint_y/cmd_pos</topic>
-    <p_gain>500.0</p_gain>
-    <i_gain>6.0</i_gain>
-    <d_gain>60.0</d_gain>
+    <p_gain>140.0</p_gain>
+    <i_gain>0.0</i_gain>
+    <d_gain>10.5</d_gain>
+    <cmd_max>8.0</cmd_max>
+    <cmd_min>-8.0</cmd_min>
   </plugin>
 
   <plugin filename="libignition-gazebo-joint-position-controller-system.so"
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_z</joint_name>
     <topic>/model/robot_system/joint/joint_z/cmd_pos</topic>
-    <p_gain>900.0</p_gain>
-    <i_gain>20.0</i_gain>
-    <d_gain>45.0</d_gain>
+    <p_gain>2600.0</p_gain>
+    <i_gain>1200.0</i_gain>
+    <d_gain>40.0</d_gain>
+    <i_max>3.0</i_max>
+    <i_min>-3.0</i_min>
+    <cmd_max>6.0</cmd_max>
+    <cmd_min>-6.0</cmd_min>
   </plugin>
 
-  <plugin filename="ignition-gazebo-detachable-joint-system"
-          name="ignition::gazebo::systems::DetachableJoint">
-    <parent_link>theta_link_1</parent_link>
-    <child_model>check_chip</child_model>
-    <child_link>chip_link</child_link>
-    <attach_topic>/model/robot_system/vacuum/attach</attach_topic>
-    <detach_topic>/model/robot_system/vacuum/detach</detach_topic>
-    <output_topic>/model/robot_system/vacuum/state</output_topic>
-  </plugin>
-
-  <plugin filename="ignition-gazebo-detachable-joint-system"
-          name="ignition::gazebo::systems::DetachableJoint">
-    <parent_link>substrate_link</parent_link>
-    <child_model>check_chip</child_model>
-    <child_link>chip_link</child_link>
-    <attach_topic>/model/robot_system/substrate_bond/attach</attach_topic>
-    <detach_topic>/model/robot_system/substrate_bond/detach</detach_topic>
-    <output_topic>/model/robot_system/substrate_bond/state</output_topic>
-  </plugin>
 </gazebo>
 
 <gazebo>
@@ -340,61 +329,12 @@
           name="ignition::gazebo::systems::JointPositionController">
     <joint_name>joint_theta</joint_name>
     <topic>/model/robot_system/joint/joint_theta/cmd_pos</topic>
-    <p_gain>0.3</p_gain>
+    <p_gain>0.05</p_gain>
     <i_gain>0.0</i_gain>
-    <d_gain>0.03</d_gain>
+    <d_gain>0.0008</d_gain>
+    <cmd_max>0.2</cmd_max>
+    <cmd_min>-0.2</cmd_min>
   </plugin>
 </gazebo>
-
-<link name="substrate_link">
-  <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.02 0.02 0.005"/>
-    </geometry>
-  </visual>
-  
-  <collision>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.02 0.02 0.005"/>
-    </geometry>
-  </collision>
-
-  <inertial>
-    <mass value="0.005"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>
-  </inertial>
-</link> 
-
-<joint name="world_to_substrate" type="fixed">
-  <parent link="world"/> 
-  <child link="substrate_link"/>
-  <origin xyz="0 0 0.0525" rpy="0 0 0"/>
-</joint>
-
-<gazebo reference="substrate_link">
-  <sensor name="substrate_contact_sensor" type="contact">
-    <topic>/model/robot_system/substrate/contact</topic>
-    <contact>
-      <collision>substrate_link_collision</collision>
-    </contact>
-    <always_on>1</always_on>
-    <update_rate>100</update_rate>
-  </sensor>
-  <visual>
-    <material>
-      <ambient>1 1 1 1</ambient>
-      <diffuse>1 1 1 1</diffuse>
-      <pbr>
-        <metal>
-          <albedo_map>model://robot_system_description/materials/textures/substrate_pattern.png</albedo_map>
-        </metal>
-      </pbr>
-    </material>
-  </visual>
-</gazebo>
-
 
 </robot>

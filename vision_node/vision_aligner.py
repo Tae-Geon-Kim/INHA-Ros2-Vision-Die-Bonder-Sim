@@ -66,6 +66,18 @@ class DetectionConfig:
 
 
 @dataclass(frozen=True)
+class ReferenceRegistrationConfig:
+    """기준 영상과 현재 영상의 4축 정합 설정."""
+
+    max_width: int = 960
+    max_iterations: int = 120
+    epsilon: float = 1e-6
+    min_correlation: float = 0.20
+    macro_roi_fraction: float = 1.0
+    micro_roi_fraction: float = 1.0
+
+
+@dataclass(frozen=True)
 class MarkerDetection:
     """검출된 마커 중심과 디버깅용 부가 정보."""
 
@@ -94,6 +106,7 @@ class VisionAligner:
         macro_calibration: MacroCalibration | None = None,
         micro_camera_specs: Mapping[str, MicroCameraSpec] | None = None,
         detection_config: DetectionConfig | None = None,
+        reference_registration_config: ReferenceRegistrationConfig | None = None,
         debug_mode: bool = False,
         show_debug_windows: bool = False,
     ):
@@ -108,6 +121,9 @@ class VisionAligner:
             raise ValueError("Micro 카메라 spec은 정확히 4개가 필요합니다.")
 
         self.detection_config = detection_config or DetectionConfig()
+        self.reference_registration_config = (
+            reference_registration_config or ReferenceRegistrationConfig()
+        )
         self.debug_mode = debug_mode
         self.show_debug_windows = show_debug_windows
 
@@ -229,6 +245,281 @@ class VisionAligner:
             micro_images=micro_images,
             target_kind=target_kind,
             debug_prefix=f"place_{target_kind}",
+        )
+
+    def align_reference_image(
+        self,
+        *,
+        reference_image: ImageInput,
+        current_image: ImageInput,
+        pixel_size: tuple[float, float],
+        reference_distance_mm: float,
+        roi_fraction: float | None = None,
+        axis_sign: tuple[float, float] = (1.0, 1.0),
+        motion_model: Literal["translation", "affine"] = "affine",
+    ) -> dict[str, float]:
+        """기준 영상으로 돌아가기 위한 dx, dy, dz, dtheta를 계산합니다."""
+
+        reference = self._load_image(reference_image)
+        current = self._load_image(current_image)
+        if current.shape[:2] != reference.shape[:2]:
+            current = cv2.resize(
+                current,
+                (reference.shape[1], reference.shape[0]),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        fraction = (
+            self.reference_registration_config.micro_roi_fraction
+            if roi_fraction is None
+            else float(roi_fraction)
+        )
+        reference_crop = self._center_crop_fraction(reference, fraction)
+        current_crop = self._center_crop_fraction(current, fraction)
+        reference_gray = self._registration_gray(reference_crop)
+        current_gray = self._registration_gray(current_crop)
+
+        resize_scale = min(
+            1.0,
+            self.reference_registration_config.max_width
+            / max(1.0, float(reference_gray.shape[1])),
+        )
+        if resize_scale < 1.0:
+            output_size = (
+                max(32, int(round(reference_gray.shape[1] * resize_scale))),
+                max(32, int(round(reference_gray.shape[0] * resize_scale))),
+            )
+            reference_work = cv2.resize(
+                reference_gray,
+                output_size,
+                interpolation=cv2.INTER_AREA,
+            )
+            current_work = cv2.resize(
+                current_gray,
+                output_size,
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            reference_work = reference_gray
+            current_work = current_gray
+
+        if motion_model not in {"translation", "affine"}:
+            raise ValueError(f"unsupported registration motion model: {motion_model}")
+
+        shift, phase_score = cv2.phaseCorrelate(reference_work, current_work)
+        warp = np.array(
+            [[1.0, 0.0, shift[0]], [0.0, 1.0, shift[1]]],
+            dtype=np.float32,
+        )
+        cv_motion_model = (
+            cv2.MOTION_TRANSLATION
+            if motion_model == "translation"
+            else cv2.MOTION_AFFINE
+        )
+        criteria = (
+            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+            self.reference_registration_config.max_iterations,
+            self.reference_registration_config.epsilon,
+        )
+
+        try:
+            correlation, warp = cv2.findTransformECC(
+                reference_work,
+                current_work,
+                warp,
+                cv_motion_model,
+                criteria,
+                None,
+                5,
+            )
+        except cv2.error:
+            correlation = float(phase_score)
+
+        if correlation < self.reference_registration_config.min_correlation:
+            raise ValueError(
+                "기준 영상 정합 신뢰도가 낮습니다: "
+                f"correlation={correlation:.3f}"
+            )
+
+        affine = warp[:, :2].astype(np.float64)
+        translation = warp[:, 2].astype(np.float64) / resize_scale
+        center = np.array(
+            [reference_gray.shape[1] / 2.0, reference_gray.shape[0] / 2.0],
+            dtype=np.float64,
+        )
+        current_center = affine @ center + translation
+        image_offset = current_center - center
+
+        scale = math.sqrt(max(abs(float(np.linalg.det(affine))), 1e-12))
+        image_rotation_deg = math.degrees(math.atan2(affine[1, 0], affine[0, 0]))
+        dx = -image_offset[0] * float(pixel_size[0]) * float(axis_sign[0])
+        dy = -image_offset[1] * float(pixel_size[1]) * float(axis_sign[1])
+        dz = float(reference_distance_mm) * (1.0 - 1.0 / scale)
+        dtheta = self._normalize_angle_deg(-image_rotation_deg)
+
+        return {
+            "dx": float(dx),
+            "dy": float(dy),
+            "dz": float(dz),
+            "dtheta": float(dtheta),
+            "score": float(correlation),
+            "scale": float(scale),
+        }
+
+    def align_reference_square_marker(
+        self,
+        *,
+        reference_image: ImageInput,
+        current_image: ImageInput,
+        pixel_size: tuple[float, float],
+        reference_distance_mm: float,
+        axis_sign: tuple[float, float] = (1.0, 1.0),
+        theta_axis_sign: float = 1.0,
+    ) -> dict[str, float | str]:
+        """Fast Macro registration from the visible chip or substrate outline."""
+
+        reference = self._load_image(reference_image)
+        current = self._load_image(current_image)
+        if current.shape[:2] != reference.shape[:2]:
+            current = cv2.resize(
+                current,
+                (reference.shape[1], reference.shape[0]),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        reference_marker = self._detect_square_marker(reference, None)
+        current_marker = self._detect_square_marker(current, None)
+        image_offset_x = current_marker.center[0] - reference_marker.center[0]
+        image_offset_y = current_marker.center[1] - reference_marker.center[1]
+        dx = -image_offset_x * float(pixel_size[0]) * float(axis_sign[0])
+        dy = -image_offset_y * float(pixel_size[1]) * float(axis_sign[1])
+
+        # A rotated square gains roughly one raster pixel at its contour edge,
+        # which is too noisy for height estimation. Micro ECC retains Z control.
+        scale = 1.0
+        dz = 0.0
+
+        # The camera looks down while joint_theta rotates around -Z. In this
+        # setup the marker angle measured in image coordinates has the same
+        # sign as the required joint command correction.
+        image_angle_delta = self._normalize_square_angle_deg(
+            current_marker.angle_deg - reference_marker.angle_deg
+        )
+        dtheta = image_angle_delta * float(theta_axis_sign)
+        score = min(1.0, min(reference_marker.score, current_marker.score) / 5.0)
+        return {
+            "dx": float(dx),
+            "dy": float(dy),
+            "dz": float(dz),
+            "dtheta": float(dtheta),
+            "score": float(score),
+            "scale": float(scale),
+            "source": "macro_square_marker",
+        }
+
+    def align_reference_micro_set(
+        self,
+        *,
+        reference_images: Sequence[ImageInput],
+        current_images: Sequence[ImageInput],
+        pixel_size: tuple[float, float],
+        reference_distance_mm: float,
+        axis_sign: tuple[float, float] = (1.0, 1.0),
+        normalized_rois: Sequence[tuple[float, float, float, float]] | None = None,
+    ) -> dict[str, object]:
+        """Micro 카메라 4대의 기준 영상 정합 결과를 강건하게 결합합니다."""
+
+        if len(reference_images) != 4 or len(current_images) != 4:
+            raise ValueError("Micro 기준 영상과 현재 영상은 각각 정확히 4장이 필요합니다.")
+        if normalized_rois is not None and len(normalized_rois) != 4:
+            raise ValueError("Micro 정합 ROI는 카메라별로 정확히 4개가 필요합니다.")
+
+        results = []
+        failures = []
+        for index, (reference, current) in enumerate(
+            zip(reference_images, current_images),
+            start=1,
+        ):
+            if normalized_rois is not None:
+                roi = normalized_rois[index - 1]
+                reference = self._crop_normalized_roi(
+                    self._load_image(reference),
+                    roi,
+                )
+                current = self._crop_normalized_roi(
+                    self._load_image(current),
+                    roi,
+                )
+            try:
+                result = self.align_reference_image(
+                    reference_image=reference,
+                    current_image=current,
+                    pixel_size=pixel_size,
+                    reference_distance_mm=reference_distance_mm,
+                    roi_fraction=self.reference_registration_config.micro_roi_fraction,
+                    axis_sign=axis_sign,
+                )
+            except (ValueError, cv2.error) as exc:
+                failures.append({"camera_index": index, "error": str(exc)})
+                continue
+            result["camera_index"] = index
+            results.append(result)
+
+        if len(results) < 3:
+            raise ValueError(
+                "Micro 기준 영상 정합에 성공한 카메라가 3대 미만입니다: "
+                f"success={len(results)}, failures={failures}"
+            )
+
+        combined = {
+            key: float(np.median([result[key] for result in results]))
+            for key in ("dx", "dy", "dz", "dtheta", "score", "scale")
+        }
+        combined["per_camera"] = results
+        combined["failed_cameras"] = failures
+        combined["valid_camera_count"] = len(results)
+        return combined
+
+    def _crop_normalized_roi(
+        self,
+        frame: np.ndarray,
+        roi: tuple[float, float, float, float],
+    ) -> np.ndarray:
+        x0, y0, x1, y1 = roi
+        if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
+            raise ValueError(f"normalized ROI 범위가 잘못되었습니다: {roi}")
+        height, width = frame.shape[:2]
+        left = int(round(x0 * width))
+        top = int(round(y0 * height))
+        right = int(round(x1 * width))
+        bottom = int(round(y1 * height))
+        return frame[top:bottom, left:right]
+
+    def _center_crop_fraction(
+        self,
+        frame: np.ndarray,
+        fraction: float,
+    ) -> np.ndarray:
+        fraction = min(1.0, max(0.2, float(fraction)))
+        height, width = frame.shape[:2]
+        crop_width = max(32, int(round(width * fraction)))
+        crop_height = max(32, int(round(height * fraction)))
+        x0 = max(0, (width - crop_width) // 2)
+        y0 = max(0, (height - crop_height) // 2)
+        return frame[y0:y0 + crop_height, x0:x0 + crop_width]
+
+    def _registration_gray(self, frame: np.ndarray) -> np.ndarray:
+        if frame.ndim == 2:
+            gray = frame
+        else:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        return cv2.normalize(
+            gray.astype(np.float32),
+            None,
+            0.0,
+            1.0,
+            cv2.NORM_MINMAX,
         )
 
     def _align_micro(
@@ -838,5 +1129,6 @@ __all__ = [
     "DetectionConfig",
     "MacroCalibration",
     "MicroCameraSpec",
+    "ReferenceRegistrationConfig",
     "VisionAligner",
 ]
