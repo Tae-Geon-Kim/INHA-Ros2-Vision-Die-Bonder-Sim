@@ -347,16 +347,6 @@ source install/setup.bash
 ros2 launch robot_system_description gazebo_camera.launch.py
 ```
 
-학교 서버처럼 SSH로 접속한 환경에서는 Gazebo 창을 전달하지 않고 서버 모드로 실행합니다.
-
-```bash
-ros2 launch robot_system_description gazebo_camera.launch.py gui:=false
-```
-
-카메라 센서 렌더링도 서버에서 수행되므로 `nvidia-smi`에서 Gazebo 프로세스가 GPU를
-사용하는지 확인합니다. `ssh -X`로 Gazebo GUI를 띄우면 네트워크 전송 때문에 오히려
-느려질 수 있습니다.
-
 ### 4. ROS-Gazebo bridge 및 pose adapter 실행
 
 터미널 2:
@@ -469,86 +459,6 @@ ROS/Gazebo까지 확인:
 6. 프론트 실행
 7. Dashboard에서 Start Gazebo Demo 클릭
 ```
-
-## 학교 GPU 서버(team05)에서 실행
-
-서버가 Ubuntu 22.04, ROS 2 Humble, Gazebo Fortress를 제공한다는 전제의 절차입니다.
-최초 한 번 서버에 접속해 `team05`가 사용하는 작업 디렉터리에서 저장소를 복제합니다.
-
-```bash
-ssh team05@<학교-GPU-서버>
-mkdir -p ~/team05
-cd ~/team05
-git clone https://github.com/Tae-Geon-Kim/INHA-Ros2-Vision-Die-Bonder-Sim.git ros2_vision_ws
-cd ros2_vision_ws
-git checkout develop
-```
-
-의존성을 설치하고 빌드합니다. 서버에서 `sudo` 권한이 없다면 아래 패키지는 서버
-관리자에게 설치를 요청해야 합니다.
-
-```bash
-source /opt/ros/humble/setup.bash
-sudo rosdep init  # 서버에서 rosdep을 처음 사용하는 경우에만 실행
-rosdep update
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
-```
-
-이후 SSH 터미널 세 개에서 각각 실행합니다. 모든 터미널에서 같은 워크스페이스를
-source해야 합니다.
-
-터미널 1 — Gazebo 서버 모드:
-
-```bash
-cd ~/team05/ros2_vision_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch robot_system_description gazebo_camera.launch.py gui:=false
-```
-
-터미널 2 — 조인트/접촉 센서 bridge:
-
-```bash
-cd ~/team05/ros2_vision_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch vision_core joint_bridge.launch.py
-```
-
-터미널 3 — 카메라/OpenCV bridge:
-
-```bash
-cd ~/team05/ros2_vision_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch vision_core vision_alignment_bridge.launch.py alignment_process:=pick
-```
-
-다른 팀원이 올린 변경을 서버에 반영할 때는 실행 중인 노드를 종료한 뒤 다음을
-실행합니다. 서버에서 직접 코드를 수정하기보다는 각자 브랜치에서 작업하고 Git으로
-동기화하는 것을 권장합니다.
-
-```bash
-cd ~/team05/ros2_vision_ws
-git checkout develop
-git pull --ff-only origin develop
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-```
-
-GPU 및 headless 실행 확인:
-
-```bash
-nvidia-smi
-ros2 topic list
-ros2 topic hz /camera/macro/image
-```
-
-마지막 카메라 토픽 이름은 환경에 따라 다를 수 있으므로 먼저
-`ros2 topic list | grep image`로 실제 이름을 확인합니다. 카메라 토픽이 없고 Gazebo에
-EGL/OGRE 렌더링 오류가 나타나면 서버 GPU 드라이버 또는 headless 렌더링 설정이 필요한
-상태이므로 관리자에게 해당 오류 로그와 함께 문의합니다.
 
 ## 문제 해결
 

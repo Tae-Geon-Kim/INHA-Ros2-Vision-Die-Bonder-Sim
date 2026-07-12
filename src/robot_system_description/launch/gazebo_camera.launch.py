@@ -2,14 +2,7 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    ExecuteProcess,
-    SetEnvironmentVariable,
-    TimerAction,
-)
-from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration
+from launch.actions import ExecuteProcess, SetEnvironmentVariable, TimerAction
 
 
 GAZEBO_TRANSPORT_ENV = [
@@ -27,9 +20,7 @@ def generate_launch_description():
     check_chip_sdf = str(pkg_share / "models" / "red_check_chip" / "model.sdf")
     world_sdf = str(pkg_share / "worlds" / "empty_with_sensors.sdf")
 
-    # GUI and server processes are separate so a remote machine can run Gazebo
-    # without forwarding its 3D window over SSH.
-    gazebo_with_gui = ExecuteProcess(
+    gazebo = ExecuteProcess(
         cmd=[
             "ign",
             "gazebo",
@@ -37,19 +28,6 @@ def generate_launch_description():
             world_sdf,
         ],
         output="screen",
-        condition=IfCondition(LaunchConfiguration("gui")),
-    )
-
-    gazebo_headless = ExecuteProcess(
-        cmd=[
-            "ign",
-            "gazebo",
-            "-s",
-            "-r",
-            world_sdf,
-        ],
-        output="screen",
-        condition=UnlessCondition(LaunchConfiguration("gui")),
     )
 
     spawn_robot = TimerAction(
@@ -126,11 +104,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument(
-            "gui",
-            default_value="true",
-            description="Start the Gazebo GUI. Set false on a remote server.",
-        ),
         *GAZEBO_TRANSPORT_ENV,
         SetEnvironmentVariable(
             name="IGN_GAZEBO_RESOURCE_PATH",
@@ -140,8 +113,7 @@ def generate_launch_description():
             name="GZ_SIM_RESOURCE_PATH",
             value=install_share,
         ),
-        gazebo_with_gui,
-        gazebo_headless,
+        gazebo,
         spawn_robot,
         spawn_check_chip,
         spawn_second_check_chip,
