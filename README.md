@@ -13,6 +13,7 @@ Pick · Place · 적층 공정을 수행하는 디지털 트윈 프로젝트입�
 ![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.138-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=20232A)
+![Best Award](https://img.shields.io/badge/🏆_Best_Award-INHA_SW_PBL_2026-C9A227)
 
 </div>
 
@@ -20,6 +21,16 @@ Pick · Place · 적층 공정을 수행하는 디지털 트윈 프로젝트입�
 
 ## 🎬 Demo Video
 https://github.com/user-attachments/assets/bf4a3e9b-45e8-4337-bfec-a964e509ee01
+
+---
+
+## 🏆 Awards
+
+**🏆 최우수상 (Best Award)**
+
+<p align="center">
+  <img src="docs/images/award.png" width="260" alt="Application Architecture LAB PBL 최우수상 상장">
+</p>
 
 ---
 
@@ -418,7 +429,7 @@ GitHub에서 기능 브랜치 → `develop` 방향으로 Pull Request를 생성�
 
 <div align="center">
 
-### 🎓 INHA University · Team 05
+### 🎓 INHA University · Team 05 · HBM 쿳션메이션
 
 **Vision-guided precision automation for semiconductor die bonding**
 
